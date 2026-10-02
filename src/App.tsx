@@ -8,13 +8,17 @@ import UsageFooter from "./UsageFooter";
 type Ws = { id: string; cwd: string };
 type Chat = { n: number; args?: string };
 type Entry = { id: string; title: string; modified: number };
+type Prefs = { model: string; auto: boolean };
 
 const MODELS = ["default", "opus", "sonnet", "haiku"];
 const base = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-function Workspace({ ws, on, active, onFocus, onIdle }: { ws: Ws; on: boolean; active: boolean; onFocus: () => void; onIdle: () => void }) {
+function Workspace({ ws, on, active, onFocus, onIdle, onRatio, prefs, onPrefs }: { ws: Ws; on: boolean; active: boolean; onFocus: () => void; onIdle: () => void; onRatio: (r: number) => void; prefs: Prefs; onPrefs: (p: Partial<Prefs>) => void }) {
   const [chat, setChat] = useState<Chat>({ n: 0 });
+  const [model, setModel] = useState(prefs.model);
+  const [auto, setAuto] = useState(prefs.auto);
+  const flags = `${model === "default" ? "" : `--model ${model}`}${auto ? " --dangerously-skip-permissions" : ""} ${chat.args ?? ""}`;
   const [hist, setHist] = useState<Entry[] | null>(null);
   const chatId = `${ws.id}-chat-${chat.n}`;
 
@@ -24,6 +28,23 @@ function Workspace({ ws, on, active, onFocus, onIdle }: { ws: Ws; on: boolean; a
     setChat({ n: chat.n + 1, args });
     setHist(null);
   };
+  // Doi quyen phai khoi dong lai claude; --continue giu hoi thoai neu cwd da co session.
+  const toggleAuto = async () => {
+    setAuto(!auto);
+    onPrefs({ auto: !auto });
+    const has = (await invoke<Entry[]>("list_sessions", { cwd: ws.cwd })).length > 0;
+    restart(has ? "--continue" : undefined);
+  };
+
+  // Keo thanh chia chat/shell: ti le dung chung cho moi tab (CSS var --r tren .stage).
+  const drag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const bar = e.currentTarget;
+    const top = bar.previousElementSibling!.getBoundingClientRect().top;
+    const h = bar.nextElementSibling!.getBoundingClientRect().bottom - top;
+    bar.setPointerCapture(e.pointerId);
+    bar.onpointermove = (m) => onRatio(Math.min(0.9, Math.max(0.15, (m.clientY - top) / h)));
+    bar.onpointerup = () => (bar.onpointermove = null);
+  };
 
   return (
     <div className={`ws${on ? " on" : ""}${active ? " active" : ""}`} onMouseDown={onFocus}>
@@ -31,17 +52,25 @@ function Workspace({ ws, on, active, onFocus, onIdle }: { ws: Ws; on: boolean; a
         <span className="head-title" title={ws.cwd}>{ws.cwd}</span>
         <select
           className="model"
-          defaultValue="default"
-          onChange={(e) => invoke("pty_write", { id: chatId, data: `/model ${e.target.value}\r` })}
+          value={model}
+          onChange={(e) => {
+            setModel(e.target.value);
+            onPrefs({ model: e.target.value });
+            invoke("pty_write", { id: chatId, data: `/model ${e.target.value}\r` });
+          }}
         >
           {MODELS.map((m) => <option key={m}>{m}</option>)}
         </select>
+        <label className="auto" title="Tu dong duyet moi lenh (--dangerously-skip-permissions)">
+          <input type="checkbox" checked={auto} onChange={toggleAuto} /> auto
+        </label>
         <button className="icon" title="Chat moi" onClick={() => restart()}>＋</button>
         <button className="icon" title="Lich su" onClick={toggleHistory}>⟲</button>
       </div>
       <div className="chat">
-        <Pane key={chatId} id={chatId} cwd={ws.cwd} kind="chat" visible={on} args={chat.args} onIdle={onIdle} />
+        <Pane key={chatId} id={chatId} cwd={ws.cwd} kind="chat" visible={on} args={flags} onIdle={onIdle} />
       </div>
+      <div className="splitter" onPointerDown={drag} />
       <div className="shell">
         <Pane id={`${ws.id}-shell`} cwd={ws.cwd} kind="shell" visible={on} />
       </div>
@@ -70,6 +99,8 @@ export default function App() {
   const [active, setActive] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [split, setSplit] = useState(false);
+  const [ratio, setRatio] = useState(0.6);
+  const [prefs, setPrefs] = useState<Prefs>({ model: "sonnet", auto: false });
   const [alerts, setAlerts] = useState<Set<string>>(new Set());
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -89,14 +120,16 @@ export default function App() {
       setTabs(ws);
       setActive(ws[0]?.id ?? null);
       setSplit((await s.get<boolean>("split")) ?? false);
+      setRatio((await s.get<number>("ratio")) ?? 0.6);
+      setPrefs({ model: (await s.get<string>("model")) ?? "sonnet", auto: (await s.get<boolean>("auto")) ?? false });
       setReady(true);
     });
   }, []);
 
   useEffect(() => {
     if (!ready) return;
-    load("state.json").then((s) => (s.set("folders", tabs.map((t) => t.cwd)), s.set("split", split)));
-  }, [tabs, split, ready]);
+    load("state.json").then((s) => (s.set("folders", tabs.map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto)));
+  }, [tabs, split, ratio, prefs, ready]);
 
   const openFolder = async () => {
     const cwd = await open({ directory: true });
@@ -114,7 +147,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="tabs">
+      <div className={`tabs${split ? " split" : ""}`}>
         {tabs.map((t) => (
           <div key={t.id} className={`tab${t.id === active ? " on" : ""}${alerts.has(t.id) ? " alert" : ""}`} onClick={() => activate(t.id)} title={t.cwd}>
             {base(t.cwd)}
@@ -127,7 +160,7 @@ export default function App() {
           <button className={split ? "on" : ""} title="Chia man hinh" onClick={() => setSplit(true)}>◫</button>
         </div>
       </div>
-      <div className={`stage${split ? " split" : ""}`}>
+      <div className={`stage${split ? " split" : ""}`} style={{ "--r": ratio } as React.CSSProperties}>
         {tabs.length === 0 && (
           <div className="empty">
             <button onClick={openFolder}>Mo thu muc de bat dau</button>
@@ -141,6 +174,9 @@ export default function App() {
             active={split && t.id === active}
             onFocus={() => activate(t.id)}
             onIdle={() => alert(t.id)}
+            onRatio={setRatio}
+            prefs={prefs}
+            onPrefs={(p) => setPrefs((x) => ({ ...x, ...p }))}
           />
         ))}
       </div>
