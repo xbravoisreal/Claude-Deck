@@ -49,7 +49,7 @@ function Workspace({ ws, on, active, onFocus, onIdle, onRatio, prefs, onPrefs }:
   return (
     <div className={`ws${on ? " on" : ""}${active ? " active" : ""}`} onMouseDown={onFocus}>
       <div className="head">
-        <span className="head-title" title={ws.cwd}>{ws.cwd}</span>
+        <span className="head-title" title={ws.cwd} onDoubleClick={() => invoke("open_in_editor", { path: ws.cwd })}>{ws.cwd}</span>
         <select
           className="model"
           value={model}

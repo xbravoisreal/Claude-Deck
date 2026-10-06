@@ -43,10 +43,10 @@ export default function Pane({ id, cwd, kind, visible, args, onIdle }: Props) {
             activate(e: MouseEvent) {
               if (!e.ctrlKey) return;
               // Tach hau to :line / :line-line / :line:col (vd constants.ts:179-185).
-              const [, file, line] = raw.match(/^(.*?)(?::(\d+)(?:[-:]\d+)*)?$/)!;
+              const [, file] = raw.match(/^(.*?)(?::(\d+)(?:[-:]\d+)*)?$/)!;
               let p = file.replace(/\//g, "\\").replace(/(?<!:)\\+$/, "");
               if (!/^[A-Za-z]:/.test(p)) p = `${cwd}\\${p}`;
-              invoke("open_in_editor", { path: p, line: line ? +line : null })
+              invoke("open_in_editor", { path: p })
                 .catch(() => revealItemInDir(p))
                 .catch(() => {});
             },

@@ -27,20 +27,8 @@ pub fn run() {
         .expect("error while running app");
 }
 
-/// Mo file trong Notepad++ tai dong `line`. Khong phai file (thu muc, path sai) -> Err, JS fallback sang Explorer.
+/// Mo file/thu muc bang app mac dinh cua he thong.
 #[tauri::command]
-fn open_in_editor(path: String, line: Option<u32>) -> Result<(), String> {
-    if !std::path::Path::new(&path).is_file() {
-        return Err("not a file".into());
-    }
-    let mut args = vec![path];
-    if let Some(n) = line {
-        args.push(format!("-n{n}"));
-    }
-    // ponytail: hardcode cho cai dat mac dinh, them setting khi can editor khac.
-    [r"C:\Program Files\Notepad++\notepad++.exe", r"C:\Program Files (x86)\Notepad++\notepad++.exe", "notepad++"]
-        .iter()
-        .find_map(|exe| std::process::Command::new(exe).args(&args).spawn().ok())
-        .map(|_| ())
-        .ok_or_else(|| "notepad++ not found".into())
+fn open_in_editor(path: String) -> Result<(), String> {
+    tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
 }
