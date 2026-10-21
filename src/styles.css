@@ -110,3 +110,24 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .agent-row button { padding: 3px 10px; border: 1px solid #454545; border-radius: 4px; }
 .agent-row button:hover { border-color: #d97757; color: #d97757; }
 .office-error { color: #e5484d; font-size: 12px; padding: 4px 0; cursor: pointer; }
+
+.views .menu { position: relative; font-size: 14px; }
+.badge { position: absolute; top: -4px; right: -6px; min-width: 16px; padding: 0 4px; border-radius: 8px; background: #e5484d; color: #fff; font-size: 10px; line-height: 16px; text-align: center; }
+.drawer { position: absolute; top: 34px; left: 0; bottom: 0; width: 380px; z-index: 6; display: flex; flex-direction: column; background: #303030; border-right: 1px solid #3a3a3a; box-shadow: 8px 0 24px rgba(0,0,0,.4); animation: slide-in .15s ease-out; }
+@keyframes slide-in { from { transform: translateX(-100%); } }
+.drawer .history-list { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.drawer-item { padding: 10px; border: 1px solid #3a3a3a; border-radius: 6px; display: flex; flex-direction: column; gap: 4px; }
+.drawer-top { display: flex; justify-content: space-between; gap: 8px; color: #d4d4d4; }
+.drawer-title { color: #dedede; }
+.drawer-item .d { color: #7a7a7a; font-size: 11px; }
+.drawer-sum { color: #a8a8a8; font-size: 12px; white-space: pre-wrap; }
+.drawer textarea, .assign textarea, .assign input { width: 100%; padding: 5px 8px; background: #2a2a2a; color: #d4d4d4; border: 1px solid #454545; border-radius: 4px; font: inherit; }
+.drawer textarea, .assign textarea { min-height: 60px; resize: vertical; }
+.assign { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 10px; }
+.bubble { padding: 1px 6px; border-radius: 8px; font-size: 11px; }
+.bubble.review { background: #d97757; color: #fff; }
+.bubble.waiting { background: #4a3f2a; color: #e5b567; }
+.bubble.running { color: #7fb77e; }
+.queued { color: #7a7a7a; }
+.agent-row.warn { box-shadow: inset 0 0 0 1px #e08a3c; }
+.task-err { padding: 4px 12px; background: #3a2a2a; }

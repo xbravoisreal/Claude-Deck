@@ -4,10 +4,14 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { load } from "@tauri-apps/plugin-store";
 import Pane from "./Pane";
 import UsageFooter from "./UsageFooter";
-import Settings, { OfficePrefs } from "./Settings";
-import Office, { AgentLaunch } from "./Office";
+import Settings, { OfficePrefs, OFFICE_DEFAULTS } from "./Settings";
+import Office, { AgentLaunch, Dept, Task } from "./Office";
+import Drawer from "./Drawer";
 
-type Ws = { id: string; cwd: string; agent?: AgentLaunch };
+/** task: id task Office gan voi tab (pane chat co dinh `${id}-chat-0`). */
+type Ws = { id: string; cwd: string; agent?: AgentLaunch; task?: string };
+type Started = { task: Task; label: string; args: string; settings: unknown };
+type Stats = { context: number; cache_read: number; max_tokens: number };
 type Chat = { n: number; args?: string };
 type Entry = { id: string; title: string; modified: number };
 type Prefs = { model: string; auto: boolean };
@@ -16,7 +20,7 @@ const MODELS = ["default", "opus", "sonnet", "haiku"];
 const base = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-function Workspace({ ws, on, active, onFocus, onIdle, onRatio, prefs, onPrefs }: { ws: Ws; on: boolean; active: boolean; onFocus: () => void; onIdle: () => void; onRatio: (r: number) => void; prefs: Prefs; onPrefs: (p: Partial<Prefs>) => void }) {
+function Workspace({ ws, on, active, onFocus, onIdle, onEnter, onRatio, prefs, onPrefs }: { ws: Ws; on: boolean; active: boolean; onFocus: () => void; onIdle: () => void; onEnter: () => void; onRatio: (r: number) => void; prefs: Prefs; onPrefs: (p: Partial<Prefs>) => void }) {
   const [chat, setChat] = useState<Chat>({ n: 0 });
   const [model, setModel] = useState(prefs.model);
   const [auto, setAuto] = useState(prefs.auto);
@@ -71,11 +75,14 @@ function Workspace({ ws, on, active, onFocus, onIdle, onRatio, prefs, onPrefs }:
           <input type="checkbox" checked={auto} onChange={toggleAuto} /> auto
         </label>
         </>}
+        {/* Tab task: phien gan voi task, khong cho doi sang chat khac. */}
+        {!ws.task && <>
         <button className="icon" title="Chat moi" onClick={() => restart()}>＋</button>
         <button className="icon" title="Lich su" onClick={toggleHistory}>⟲</button>
+        </>}
       </div>
       <div className="chat">
-        <Pane key={chatId} id={chatId} cwd={ws.cwd} kind="chat" visible={on} args={flags} settings={ws.agent?.settings} onIdle={onIdle} />
+        <Pane key={chatId} id={chatId} cwd={ws.cwd} kind="chat" visible={on} args={flags} settings={ws.agent?.settings} onIdle={onIdle} onEnter={onEnter} />
       </div>
       <div className="splitter" onPointerDown={drag} />
       <div className="shell">
@@ -109,11 +116,23 @@ export default function App() {
   const [ratio, setRatio] = useState(0.6);
   const [prefs, setPrefs] = useState<Prefs>({ model: "sonnet", auto: false });
   const [alerts, setAlerts] = useState<Set<string>>(new Set());
-  const [office, setOffice] = useState<OfficePrefs>({ root: "", notes: "" });
+  const [office, setOffice] = useState<OfficePrefs>(OFFICE_DEFAULTS);
   const [settings, setSettings] = useState(false);
   const [view, setView] = useState<"office" | "terminal">("office");
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [drawer, setDrawer] = useState(false);
+  const [ctx, setCtx] = useState<Record<string, number>>({});
+  const [taskErr, setTaskErr] = useState("");
   const activeRef = useRef(active);
   activeRef.current = active;
+  // Ref cho cac callback async (tin hieu hook, interval) luon thay state moi nhat.
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  const officeRef = useRef(office);
+  officeRef.current = office;
 
   const activate = (id: string) => {
     setActive(id);
@@ -133,49 +152,150 @@ export default function App() {
       setSplit((await s.get<boolean>("split")) ?? false);
       setRatio((await s.get<number>("ratio")) ?? 0.6);
       setPrefs({ model: (await s.get<string>("model")) ?? "sonnet", auto: (await s.get<boolean>("auto")) ?? false });
-      setOffice({ root: (await s.get<string>("officeRoot")) || (await invoke<string>("office_root")), notes: (await s.get<string>("notesRoot")) ?? "" });
+      setOffice({
+        root: (await s.get<string>("officeRoot")) || (await invoke<string>("office_root")),
+        notes: (await s.get<string>("notesRoot")) ?? "",
+        maxLive: (await s.get<number>("maxLive")) ?? OFFICE_DEFAULTS.maxLive,
+        warnK: (await s.get<number>("warnK")) ?? OFFICE_DEFAULTS.warnK,
+      });
       setReady(true);
     });
   }, []);
 
   useEffect(() => {
     if (!ready) return;
-    load("state.json").then((s) => (s.set("folders", tabs.filter((t) => !t.agent).map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes)));
+    load("state.json").then((s) => (s.set("folders", tabs.filter((t) => !t.agent).map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes), s.set("maxLive", office.maxLive), s.set("warnK", office.warnK)));
   }, [tabs, split, ratio, prefs, office, ready]);
+
+  const root = () => officeRef.current.root;
+  const notesRoot = () => officeRef.current.notes || null;
+  const fail = (e: unknown) => setTaskErr(String(e));
+  const refresh = () => invoke<Task[]>("task_list", { root: root() }).then(setTasks, fail);
+
+  const addTab = (ws: Ws, focus: boolean) => {
+    tabsRef.current = [...tabsRef.current, ws];
+    setTabs(tabsRef.current);
+    if (focus) {
+      setActive(ws.id);
+      setView("terminal");
+    } else setActive((a) => a ?? ws.id);
+  };
+  const tabFor = (s: Started): Ws => ({ id: uid(), cwd: s.task.cwd, agent: { label: s.label, args: s.args, settings: s.settings }, task: s.task.id });
+
+  const close = (id: string) => {
+    const tab = tabsRef.current.find((t) => t.id === id);
+    const rest = tabsRef.current.filter((t) => t.id !== id);
+    tabsRef.current = rest;
+    setTabs(rest);
+    if (activeRef.current === id) setActive(rest[rest.length - 1]?.id ?? null);
+    return tab;
+  };
+  const closeTaskTab = (taskId: string) => tabsRef.current.filter((t) => t.task === taskId).forEach((t) => close(t.id));
+
+  // Chay task den luot, mo tab nen (khong cuop man hinh). Rust giu khoa nen goi trung khong mo trung.
+  const startNext = async () => {
+    try {
+      const started = await invoke<Started[]>("task_start_next", { root: root(), maxLive: officeRef.current.maxLive, notesRoot: notesRoot() });
+      started.forEach((s) => addTab(tabFor(s), false));
+    } catch (e) {
+      fail(e);
+    }
+    await refresh();
+  };
+
+  // Lan chay truoc de lai task song nhung phien da mat: giu cho o waiting, mo lai qua ☰.
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      const ts = await invoke<Task[]>("task_list", { root: root() }).catch((e) => (fail(e), [] as Task[]));
+      const orphan = ts.filter((t) => (t.status === "running" || t.status === "waiting") && !tabsRef.current.some((w) => w.task === t.id));
+      for (const t of orphan) await invoke("task_stop", { root: root(), id: t.id, reason: "app dong" }).catch(fail);
+      await startNext();
+    })();
+  }, [ready, office.root]);
+
+  const onIdle = (ws: Ws) => {
+    alert(ws.id);
+    if (!ws.task) return;
+    const was = tasksRef.current.find((t) => t.id === ws.task)?.status;
+    invoke<Task>("task_idle", { root: root(), id: ws.task }).then((t) => {
+      // Vua chuyen sang Cho sip: dong PTY giai phong cho (mo lai bang --resume). Tab mo lai tu ☰ thi giu.
+      if (t.status === "review" && was !== "review") closeTaskTab(t.id);
+      return startNext();
+    }, fail);
+  };
+  const onEnter = (ws: Ws) => {
+    const t = tasksRef.current.find((x) => x.id === ws.task);
+    if (t?.status === "waiting") invoke("task_busy", { root: root(), id: t.id }).then(refresh, fail);
+  };
+
+  const approve = (t: Task) => {
+    closeTaskTab(t.id);
+    invoke("task_approve", { root: root(), id: t.id }).then(refresh, fail);
+  };
+  const rework = (t: Task, note: string) => {
+    closeTaskTab(t.id);
+    invoke("task_rework", { root: root(), id: t.id, note }).then(startNext, fail);
+  };
+  const openTask = async (t: Task) => {
+    const tab = tabsRef.current.find((x) => x.task === t.id);
+    if (tab) return activate(tab.id), setDrawer(false);
+    try {
+      addTab(tabFor(await invoke<Started>("task_resume", { root: root(), id: t.id, notesRoot: notesRoot() })), true);
+      setDrawer(false);
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  // Moi 20s: do dai ngu canh (canh bao) va tong token doc cache (vuot tran -> Ctrl+C).
+  useEffect(() => {
+    const iv = setInterval(async () => {
+      for (const ws of tabsRef.current.filter((w) => w.task)) {
+        const st = await invoke<Stats>("task_stats", { root: root(), id: ws.task }).catch(() => null);
+        if (!st) continue;
+        setCtx((c) => ({ ...c, [ws.task!]: st.context }));
+        const t = tasksRef.current.find((x) => x.id === ws.task);
+        if (t?.status === "running" && st.cache_read > st.max_tokens) {
+          invoke("pty_write", { id: `${ws.id}-chat-0`, data: "\x03" });
+          await invoke("task_stop", { root: root(), id: t.id, reason: "vuot tran" }).catch(fail);
+          refresh();
+        }
+      }
+    }, 20000);
+    return () => clearInterval(iv);
+  }, []);
 
   const openFolder = async () => {
     const cwd = await open({ directory: true });
     if (typeof cwd !== "string") return;
-    const ws = { id: uid(), cwd };
-    setTabs((t) => [...t, ws]);
-    setActive(ws.id);
-    setView("terminal");
+    addTab({ id: uid(), cwd }, true);
   };
 
-  const openAgent = (cwd: string, agent: AgentLaunch) => {
-    const ws = { id: uid(), cwd, agent };
-    setTabs((t) => [...t, ws]);
-    setActive(ws.id);
-    setView("terminal");
+  const openAgent = (cwd: string, agent: AgentLaunch) => addTab({ id: uid(), cwd, agent }, true);
+
+  // Dong tab tay khi task con song -> task cho, giu cho de mo lai qua ☰.
+  const closeByUser = (id: string) => {
+    const tab = close(id);
+    if (tab?.task) invoke("task_stop", { root: root(), id: tab.task, reason: "da dong tab" }).then(refresh, fail);
   };
 
-  const close = (id: string) => {
-    const rest = tabs.filter((t) => t.id !== id);
-    setTabs(rest);
-    if (active === id) setActive(rest[rest.length - 1]?.id ?? null);
-  };
+  const pending = tasks.filter((t) => t.status === "review" || t.status === "waiting").length;
 
   return (
     <div className="app">
       <div className={`tabs${split ? " split" : ""}`}>
         <div className="views">
+          <button className={`menu${drawer ? " on" : ""}`} title="Cho duyet" onClick={() => setDrawer(!drawer)}>
+            ☰{pending > 0 && <span className="badge">{pending}</span>}
+          </button>
           <button className={view === "office" ? "on" : ""} onClick={() => setView("office")}>Office</button>
           <button className={view === "terminal" ? "on" : ""} onClick={() => setView("terminal")}>Terminal</button>
         </div>
         {tabs.map((t) => (
           <div key={t.id} className={`tab${t.id === active ? " on" : ""}${alerts.has(t.id) ? " alert" : ""}`} onClick={() => activate(t.id)} title={t.cwd}>
             {t.agent?.label ?? base(t.cwd)}
-            <button className="x" onClick={(e) => (e.stopPropagation(), close(t.id))}>×</button>
+            <button className="x" onClick={(e) => (e.stopPropagation(), closeByUser(t.id))}>×</button>
           </div>
         ))}
         <button className="add" onClick={openFolder}>+ Open folder</button>
@@ -185,7 +305,17 @@ export default function App() {
           <button className={settings ? "on" : ""} title="Settings" onClick={() => setSettings(!settings)}>⚙</button>
         </div>
       </div>
-      {view === "office" && <Office prefs={office} onOpen={openAgent} />}
+      {taskErr && <div className="office-error task-err" onClick={() => setTaskErr("")}>{taskErr}</div>}
+      {view === "office" && (
+        <Office
+          prefs={office}
+          tasks={tasks}
+          ctx={ctx}
+          onOpen={openAgent}
+          onTasks={startNext}
+          onDepts={(ds: Dept[]) => setNames(Object.fromEntries(ds.flatMap((d) => d.agent_defs.map((a) => [`${d.id}/${a.id}`, `${a.name} · ${d.name}`]))))}
+        />
+      )}
       <div className={`stage${split ? " split" : ""}${view === "office" ? " hidden" : ""}`} style={{ "--r": ratio } as React.CSSProperties}>
         {tabs.length === 0 && (
           <div className="empty">
@@ -199,13 +329,15 @@ export default function App() {
             on={view === "terminal" && (split || t.id === active)}
             active={split && t.id === active}
             onFocus={() => activate(t.id)}
-            onIdle={() => alert(t.id)}
+            onIdle={() => onIdle(t)}
+            onEnter={() => onEnter(t)}
             onRatio={setRatio}
             prefs={prefs}
             onPrefs={(p) => setPrefs((x) => ({ ...x, ...p }))}
           />
         ))}
       </div>
+      {drawer && <Drawer tasks={tasks} names={names} onApprove={approve} onRework={rework} onOpen={openTask} onClose={() => setDrawer(false)} />}
       {settings && <Settings value={office} onSave={setOffice} onClose={() => setSettings(false)} />}
       <UsageFooter />
     </div>

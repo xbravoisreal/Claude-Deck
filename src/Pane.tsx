@@ -10,12 +10,14 @@ import "@xterm/xterm/css/xterm.css";
 // Duong dan tuyet doi (H:\x), tuong doi (./x, a/b). ponytail: khong ho tro path co dau cach hay bi wrap sang dong sau.
 const PATH_RE = /(?:(?<!\w)[A-Za-z]:[\\/]|\.{1,2}[\\/]|(?<![\w:\\/.-])[\w.-]+[\\/])[^\s"'`<>|*?]*/g;
 
-type Props = { id: string; cwd: string; kind: "chat" | "shell"; visible: boolean; args?: string; settings?: unknown; onIdle?: () => void };
+type Props = { id: string; cwd: string; kind: "chat" | "shell"; visible: boolean; args?: string; settings?: unknown; onIdle?: () => void; onEnter?: () => void };
 
-export default function Pane({ id, cwd, kind, visible, args, settings, onIdle }: Props) {
+export default function Pane({ id, cwd, kind, visible, args, settings, onIdle, onEnter }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const idleRef = useRef(onIdle);
   idleRef.current = onIdle;
+  const enterRef = useRef(onEnter);
+  enterRef.current = onEnter;
   const fitRef = useRef<FitAddon | null>(null);
   const termRef = useRef<Terminal | null>(null);
 
@@ -88,7 +90,10 @@ export default function Pane({ id, cwd, kind, visible, args, settings, onIdle }:
     };
     host.current!.addEventListener("paste", onPaste, true);
 
-    const d1 = term.onData((data) => invoke("pty_write", { id, data }));
+    const d1 = term.onData((data) => {
+      invoke("pty_write", { id, data });
+      if (data.includes("\r")) enterRef.current?.();
+    });
     const d2 = term.onResize(({ cols, rows }) => invoke("pty_resize", { id, cols, rows }));
     // Debounce: keo splitter / bat split ban ra hang chuc resize, moi lan claude ve lai ca man hinh.
     let t: number | undefined;
