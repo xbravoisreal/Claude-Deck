@@ -84,3 +84,11 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .acct-item .x { color: #7a7a7a; padding: 0 6px; }
 .acct-item .x:hover { color: #e5484d; }
 .acct-menu .hint { padding: 8px; font-size: 11px; }
+
+.settings .history-list { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+.set-field { display: flex; flex-direction: column; gap: 4px; color: #a8a8a8; font-size: 12px; }
+.set-field > div { display: flex; gap: 6px; }
+.set-field input { flex: 1; min-width: 0; padding: 5px 8px; background: #2a2a2a; color: #d4d4d4; border: 1px solid #454545; border-radius: 4px; font: inherit; }
+.set-field button, .set-actions button { padding: 4px 10px; border: 1px solid #454545; border-radius: 4px; }
+.set-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.set-actions .primary { background: #d97757; border-color: #d97757; color: #fff; }

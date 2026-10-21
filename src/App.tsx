@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { load } from "@tauri-apps/plugin-store";
 import Pane from "./Pane";
 import UsageFooter from "./UsageFooter";
+import Settings, { OfficePrefs } from "./Settings";
 
 type Ws = { id: string; cwd: string };
 type Chat = { n: number; args?: string };
@@ -102,6 +103,8 @@ export default function App() {
   const [ratio, setRatio] = useState(0.6);
   const [prefs, setPrefs] = useState<Prefs>({ model: "sonnet", auto: false });
   const [alerts, setAlerts] = useState<Set<string>>(new Set());
+  const [office, setOffice] = useState<OfficePrefs>({ root: "", notes: "" });
+  const [settings, setSettings] = useState(false);
   const activeRef = useRef(active);
   activeRef.current = active;
 
@@ -122,14 +125,15 @@ export default function App() {
       setSplit((await s.get<boolean>("split")) ?? false);
       setRatio((await s.get<number>("ratio")) ?? 0.6);
       setPrefs({ model: (await s.get<string>("model")) ?? "sonnet", auto: (await s.get<boolean>("auto")) ?? false });
+      setOffice({ root: (await s.get<string>("officeRoot")) || (await invoke<string>("office_root")), notes: (await s.get<string>("notesRoot")) ?? "" });
       setReady(true);
     });
   }, []);
 
   useEffect(() => {
     if (!ready) return;
-    load("state.json").then((s) => (s.set("folders", tabs.map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto)));
-  }, [tabs, split, ratio, prefs, ready]);
+    load("state.json").then((s) => (s.set("folders", tabs.map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes)));
+  }, [tabs, split, ratio, prefs, office, ready]);
 
   const openFolder = async () => {
     const cwd = await open({ directory: true });
@@ -158,6 +162,7 @@ export default function App() {
         <div className="layout">
           <button className={split ? "" : "on"} title="Tung tab" onClick={() => setSplit(false)}>▭</button>
           <button className={split ? "on" : ""} title="Chia man hinh" onClick={() => setSplit(true)}>◫</button>
+          <button className={settings ? "on" : ""} title="Settings" onClick={() => setSettings(!settings)}>⚙</button>
         </div>
       </div>
       <div className={`stage${split ? " split" : ""}`} style={{ "--r": ratio } as React.CSSProperties}>
@@ -180,6 +185,7 @@ export default function App() {
           />
         ))}
       </div>
+      {settings && <Settings value={office} onSave={setOffice} onClose={() => setSettings(false)} />}
       <UsageFooter />
     </div>
   );
