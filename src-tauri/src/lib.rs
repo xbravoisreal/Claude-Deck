@@ -1,6 +1,7 @@
 mod accounts;
 mod clip;
 mod history;
+mod office;
 mod pty;
 mod usage;
 
