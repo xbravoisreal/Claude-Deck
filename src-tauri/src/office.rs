@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use crate::pty::ps_quote;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -12,7 +13,7 @@ pub struct AgentDef {
     pub prompt: String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct DeptConfig {
     pub id: String,
     pub name: String,
@@ -66,7 +67,18 @@ pub fn load_office(root: &Path) -> Vec<Department> {
         .filter_map(Result::ok)
         .filter_map(|e| {
             let dir = e.path();
-            let config: DeptConfig = serde_json::from_str(&std::fs::read_to_string(dir.join("department.json")).ok()?).ok()?;
+            let id = dir.file_name()?.to_string_lossy().into_owned();
+            let parsed = std::fs::read_to_string(dir.join("department.json"))
+                .map_err(err)
+                .and_then(|s| serde_json::from_str::<DeptConfig>(&s).map_err(err));
+            // department.json hong -> van hien phong kem loi, khong de phong bien mat.
+            let config = match parsed {
+                Ok(c) => c,
+                Err(e) => {
+                    let config = DeptConfig { id: id.clone(), name: id, ..Default::default() };
+                    return Some(Department { config, agent_defs: vec![], errors: vec![format!("department.json: {e}")] });
+                }
+            };
             let mut errors = vec![];
             let agent_defs = config
                 .agents
@@ -85,17 +97,28 @@ pub fn load_office(root: &Path) -> Vec<Department> {
     out
 }
 
-/// JSON cho `claude --agents`: {"<id>": {description, prompt, tools, model?}}.
-pub fn agents_json(d: &Department) -> serde_json::Value {
-    let mut m = serde_json::Map::new();
+/// Ten plugin tam; agent trong phien la `office:<id>`.
+const PLUGIN: &str = "office";
+
+/// Ghi plugin tam chua agent cua phong (`--agents <file>` chi chay voi --print, nen dung `--plugin-dir`).
+/// Plugin agent duoc goi bang `name` -> ghi name = id. Gia tri ghi dang chuoi JSON (hop le YAML).
+pub fn write_plugin(d: &Department, dir: &Path) -> std::io::Result<()> {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir.join(".claude-plugin"))?;
+    std::fs::create_dir_all(dir.join("agents"))?;
+    std::fs::write(dir.join(".claude-plugin").join("plugin.json"), serde_json::json!({ "name": PLUGIN, "version": "0.0.0" }).to_string())?;
     for a in &d.agent_defs {
-        let mut v = serde_json::json!({ "description": a.description, "prompt": a.prompt, "tools": a.tools });
-        if let Some(model) = &a.model {
-            v["model"] = model.clone().into();
+        let q = |s: &str| serde_json::Value::from(s).to_string();
+        let mut head = format!("name: {}\ndescription: {}\n", a.id, q(&a.description));
+        if !a.tools.is_empty() {
+            head += &format!("tools: {}\n", a.tools.join(", "));
         }
-        m.insert(a.id.clone(), v);
+        if let Some(m) = &a.model {
+            head += &format!("model: {m}\n");
+        }
+        std::fs::write(dir.join("agents").join(format!("{}.md", a.id)), format!("---\n{head}---\n{}", a.prompt))?;
     }
-    m.into()
+    Ok(())
 }
 
 /// Du lieu mac dinh: (duong dan tuong doi trong root, noi dung).
@@ -167,8 +190,8 @@ pub struct LaunchSpec {
     pub settings: serde_json::Value,
 }
 
-/// JSON di qua file (`agents_file`) vi PowerShell 5.1 lam hong dau `"` khi truyen cho exe.
-pub fn launch_spec(d: &Department, agent_id: &str, agents_file: &Path, notes_root: Option<&str>) -> Result<LaunchSpec, String> {
+/// Agent di qua plugin dir (file), khong qua chuoi tham so: PowerShell 5.1 lam hong dau `"` khi truyen cho exe.
+pub fn launch_spec(d: &Department, agent_id: &str, plugin_dir: &Path, notes_root: Option<&str>) -> Result<LaunchSpec, String> {
     let agent = d.agent_defs.iter().find(|a| a.id == agent_id).ok_or(format!("khong co agent {agent_id}"))?;
     // Lead goi subagent nen phien can du tool cua ca phong; agent khac chi can tool cua minh.
     let mut tools: Vec<&str> = vec![];
@@ -179,12 +202,15 @@ pub fn launch_spec(d: &Department, agent_id: &str, agents_file: &Path, notes_roo
         }
     }
     let mut args = format!(
-        "--agent {agent_id} --agents '{}' --permission-mode auto --strict-mcp-config --tools {}",
-        agents_file.display(),
-        tools.join(" ")
+        "--plugin-dir {} --agent {} --permission-mode auto --strict-mcp-config",
+        ps_quote(&plugin_dir.to_string_lossy()),
+        ps_quote(&format!("{PLUGIN}:{agent_id}"))
     );
+    if !tools.is_empty() {
+        args += &format!(" --tools {}", tools.join(" "));
+    }
     if let Some(n) = notes_root.filter(|n| !n.is_empty()) {
-        args += &format!(" --add-dir '{}'", Path::new(n).join("ClaudeDeck").display());
+        args += &format!(" --add-dir {}", ps_quote(&Path::new(n).join("ClaudeDeck").to_string_lossy()));
     }
     let mut deny: Vec<&str> = DENY_ALL.to_vec();
     if agent_id == "reviewer" {
@@ -196,12 +222,12 @@ pub fn launch_spec(d: &Department, agent_id: &str, agents_file: &Path, notes_roo
 #[tauri::command]
 pub fn office_launch(root: String, dept: String, agent: String, notes_root: Option<String>) -> Result<LaunchSpec, String> {
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept).ok_or(format!("khong co phong {dept}"))?;
-    let file = std::env::temp_dir().join(format!("claudedeck-agents-{dept}.json"));
-    std::fs::write(&file, agents_json(&d).to_string()).map_err(err)?;
+    let dir = std::env::temp_dir().join(format!("claudedeck-plugin-{dept}"));
+    write_plugin(&d, &dir).map_err(err)?;
     if let Some(n) = notes_root.as_deref().filter(|n| !n.is_empty()) {
         std::fs::create_dir_all(Path::new(n).join("ClaudeDeck")).map_err(err)?;
     }
-    launch_spec(&d, &agent, &file, notes_root.as_deref())
+    launch_spec(&d, &agent, &dir, notes_root.as_deref())
 }
 
 #[cfg(test)]
@@ -267,12 +293,32 @@ mod tests {
     }
 
     #[test]
-    fn agents_json_keeps_prompt_verbatim() {
+    fn plugin_keeps_prompt_verbatim() {
         let root = tmp("verbatim");
         let prompt = "Dung 'x' va \"y\"\ndong 2";
-        dept(&root, &["ok"], &[("ok", &format!("---\ndescription: d\n---\n{prompt}"))]);
+        dept(&root, &["ok"], &[("ok", &format!("---\nname: Ok Agent\ndescription: a: \"b\"\n---\n{prompt}"))]);
         let d = &load_office(&root)[0];
-        assert_eq!(agents_json(d)["ok"]["prompt"], prompt);
+        let dir = root.join("plugin");
+        write_plugin(d, &dir).unwrap();
+        let md = fs::read_to_string(dir.join("agents/ok.md")).unwrap();
+        let a = parse_agent("ok", &md).unwrap();
+        assert_eq!(a.prompt, prompt);
+        assert_eq!(a.name, "ok"); // plugin agent duoc goi bang name -> phai la id
+        assert!(!md.contains("tools:")); // khong co tools -> bo truong (ke thua)
+        let plugin: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.join(".claude-plugin/plugin.json")).unwrap()).unwrap();
+        assert_eq!(plugin["name"], "office");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn load_reports_broken_department() {
+        let root = tmp("broken-dept");
+        fs::create_dir_all(root.join("departments/oops")).unwrap();
+        fs::write(root.join("departments/oops/department.json"), "{ not json").unwrap();
+        let o = load_office(&root);
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].config.id, "oops");
+        assert!(o[0].errors[0].contains("department.json"));
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -325,8 +371,8 @@ mod tests {
     #[test]
     fn launch_spec_for_reviewer() {
         let (root, d) = software_dev("ls-rev");
-        let s = launch_spec(&d, "reviewer", Path::new("C:\\t\\a.json"), None).unwrap();
-        assert!(s.args.starts_with("--agent reviewer --agents 'C:\\t\\a.json' --permission-mode auto --strict-mcp-config --tools "));
+        let s = launch_spec(&d, "reviewer", Path::new("C:\\t\\p"), None).unwrap();
+        assert!(s.args.starts_with("--plugin-dir 'C:\\t\\p' --agent 'office:reviewer' --permission-mode auto --strict-mcp-config --tools "), "{}", s.args);
         assert!(!s.args.contains("dangerously"));
         assert!(!s.args.contains("--add-dir"));
         let d = deny(&s);
@@ -350,6 +396,14 @@ mod tests {
         let (root, d) = software_dev("ls-space");
         let s = launch_spec(&d, "dev", Path::new("a.json"), Some("H:\\My Notes\\Vault")).unwrap();
         assert!(s.args.ends_with("--add-dir 'H:\\My Notes\\Vault\\ClaudeDeck'"), "{}", s.args);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn launch_spec_escapes_apostrophe() {
+        let (root, d) = software_dev("ls-apos");
+        let s = launch_spec(&d, "dev", Path::new("a"), Some("H:\\Bob's Vault")).unwrap();
+        assert!(s.args.ends_with("--add-dir 'H:\\Bob''s Vault\\ClaudeDeck'"), "{}", s.args);
         fs::remove_dir_all(&root).unwrap();
     }
 

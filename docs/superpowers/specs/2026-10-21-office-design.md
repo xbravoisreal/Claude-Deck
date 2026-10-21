@@ -69,7 +69,7 @@ Release và Analyst bị bỏ: spec do Tech Lead viết, release là một skill
 ## 6. Mô hình dữ liệu
 
 Giữ cấu trúc `office/` của plan v2 (mục 2) với các thay đổi:
-- **Không copy vào `.claude/` của dự án đích.** Khi khởi chạy, ClaudeDeck đọc các file Agent `.md` của phòng, dựng JSON và truyền qua `--agents`; phiên Tech Lead chạy bằng `--agent tech-lead`; giao thẳng một Agent thì `--agent <id>`. Skill vẫn cần nằm ở nơi Claude Code đọc được; cách triển khai skill là việc của builder (xem mục 11).
+- **Không copy vào `.claude/` của dự án đích.** Khi khởi chạy, ClaudeDeck ghi các Agent của phòng thành một plugin tạm (`%TEMP%\claudedeck-plugin-<phòng>`) và truyền qua `--plugin-dir`; phiên chạy bằng `--agent office:<id>`, subagent tên `office:<id>`. (`--agents <file>` chỉ chạy với `--print`, đã thử ở Giai đoạn 1.) Skill vẫn cần nằm ở nơi Claude Code đọc được; cách triển khai skill là việc của builder (xem mục 11).
 - Bỏ `meta.json` và `canSpawn`. Frontmatter Agent giữ `name`, `description`, `tools`, `model`. `status` (active/probation/retired) và `budget` nằm trong `department.json`.
 - `department.json` có thêm `workspace` (chọn bằng hộp thoại chọn thư mục khi tạo phòng).
 - Mỗi phòng có thêm `room.json` (giao diện, xem mục 8).

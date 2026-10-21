@@ -57,6 +57,11 @@ fn hook_settings(app: &AppHandle, id: &str, extra: Option<serde_json::Value>) ->
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Chuoi nhay don cua PowerShell: `'` trong chuoi viet thanh `''`.
+pub fn ps_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
 /// kind = "chat": chay `claude` trong PowerShell. kind = "shell": PowerShell thuong.
 /// args: tham so them cho claude, vd "--resume <id>".
 #[tauri::command]
@@ -79,7 +84,7 @@ pub fn pty_spawn(
     cmd.arg("-NoLogo");
     if kind == "chat" {
         let settings = hook_settings(&app, &id, settings)?;
-        let claude = format!("claude --settings '{settings}' {}", args.unwrap_or_default());
+        let claude = format!("claude --settings {} {}", ps_quote(&settings), args.unwrap_or_default());
         cmd.args(["-NoExit", "-Command", &claude]);
     }
     cmd.cwd(&cwd);
