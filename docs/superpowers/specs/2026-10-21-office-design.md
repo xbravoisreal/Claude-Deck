@@ -58,6 +58,10 @@ ClaudeDeck (Tauri 2 + React, Windows) hiện chạy Claude Code theo tab. Office
 - `--disallowedTools` cứng chung cho mọi Agent: `git push`, xóa hàng loạt (`rm -rf`, `Remove-Item -Recurse`, `del /s`), lệnh mạng ra ngoài (`curl`, `Invoke-WebRequest`, `WebFetch`…). Reviewer thêm cấm `Edit`/`Write`/`NotebookEdit`.
 - Lệnh nằm ngoài allowlist mà Claude Code dừng lại hỏi → hook `Notification` báo về → task vào `waiting` với lý do "xin quyền: <lệnh>" → Telegram gửi tin có nút **Cho phép / Từ chối**; app trả lời bằng cách gõ lựa chọn tương ứng vào PTY của phiên. Danh sách chờ duyệt ☰ cũng hiện mục này với hai nút đó.
 
+**Khởi chạy tối giản (giảm token):** đo thực tế, mỗi phiên thường mở đầu với ~57K token ngữ cảnh (system prompt, công cụ, MCP, danh sách skill, hook chèn văn bản), và phần này bị đọc lại ở mọi lượt. Phiên Office luôn chạy với `--strict-mcp-config` (không MCP trừ khi Agent khai báo cần), `--tools` chỉ gồm công cụ của vai, và không nạp plugin/skill ngoài skill của phòng. Mục tiêu: ngữ cảnh mở đầu ≤ 25K. Builder đo con số thật ở Giai đoạn 1 và ghi lại.
+
+**Cảnh báo ngữ cảnh:** app đọc độ dài ngữ cảnh của lượt mới nhất từ transcript. Trên 150K: bàn hiện viền cam + tooltip "phiên dài, nên tách task"; trên 250K: gửi Telegram. Ngưỡng chỉnh trong Settings.
+
 Release và Analyst bị bỏ: spec do Tech Lead viết, release là một skill (`release-checklist`) gọi khi cần.
 
 **Ước lượng chi phí một task đủ luồng:** ~3–4M token đọc cache (~1,5–2 lần một phiên thường). Bản 7 Agent ước ~6–7M (~3 lần). Mỗi lần tuyển qua HR ~1–2 phiên.
@@ -71,6 +75,8 @@ Giữ cấu trúc `office/` của plan v2 (mục 2) với các thay đổi:
 - Mỗi phòng có thêm `room.json` (giao diện, xem mục 8).
 
 **Bàn giao giữa các Agent:** mỗi task có thư mục `<workspace>/.office/tasks/<task-id>/` chứa `brief.md` (đề bài + nhận xét làm lại), `spec.md`, `review.md`, `result.md`. Thêm `.office/` vào `.gitignore` của dự án đích.
+
+**Ghi chú trong Obsidian (tùy chọn):** Settings có ô `notesRoot` (đường dẫn vault Obsidian). Có `notesRoot` thì thư mục bàn giao của task chuyển sang `<notesRoot>/ClaudeDeck/<phòng>/<task-id>/` thay vì `<workspace>/.office/tasks/<task-id>/`; phiên Agent được thêm `--add-dir <notesRoot>/ClaudeDeck`. Mỗi phòng có `<notesRoot>/ClaudeDeck/<phòng>/project-notes.md` (kiến trúc, quy ước, quyết định đã chốt), Agent được dặn đọc file này **trước** khi đọc code và Tech Lead cập nhật nó sau mỗi task được duyệt. Mọi file bàn giao có frontmatter `task`, `agent`, `department`, `status`, `created`, `tokens` để Obsidian lọc/thống kê được. Không dùng MCP của Obsidian: Agent đọc ghi file trực tiếp.
 
 **Cách ly:** task có sửa code chạy trong một git worktree riêng (`<workspace>/.office/worktrees/<task-id>`), nhánh `office/<task-id>`. Duyệt xong thì sếp tự merge (không auto-merge, không push).
 
@@ -159,3 +165,5 @@ Mỗi giai đoạn chạy được, kiểm được, commit riêng.
 - Phiên đóng khi vào Chờ síp, mở lại bằng `--resume` khi làm lại.
 - Mỗi Agent một task đang chạy, task thêm xếp hàng.
 - ClaudeDeck tự chạy thử việc HR bằng `-p` trong thư mục nháp.
+- Phiên Office khởi chạy tối giản (không MCP, giới hạn công cụ), cảnh báo ngữ cảnh ở 150K/250K.
+- Ghi chú task nằm trong vault Obsidian khi có `notesRoot`; `project-notes.md` mỗi phòng do Tech Lead giữ.
