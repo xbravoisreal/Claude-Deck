@@ -22,6 +22,7 @@ pub fn run() {
             office::office_root,
             office::office_load,
             office::office_set_workspace,
+            office::office_launch,
             open_in_editor,
             accounts::list_accounts,
             accounts::switch_account,

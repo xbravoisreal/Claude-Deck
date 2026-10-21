@@ -146,6 +146,64 @@ pub fn office_set_workspace(root: String, dept: String, workspace: String) -> Re
     std::fs::write(&p, serde_json::to_string_pretty(&v).map_err(err)?).map_err(err)
 }
 
+/// Cam cung cho moi phien Office (spec muc 5).
+const DENY_ALL: &[&str] = &[
+    "Bash(git push:*)",
+    "Bash(rm -rf:*)",
+    "Bash(Remove-Item:*)",
+    "Bash(del /s:*)",
+    "Bash(curl:*)",
+    "Bash(Invoke-WebRequest:*)",
+    "WebFetch",
+    "WebSearch",
+];
+const DENY_REVIEWER: &[&str] = &["Edit", "Write", "NotebookEdit"];
+
+#[derive(Serialize)]
+pub struct LaunchSpec {
+    /// Tham so them cho `claude` (pty_spawn dat sau `--settings`).
+    pub args: String,
+    /// Gop vao file settings cua phien (cung file voi hook).
+    pub settings: serde_json::Value,
+}
+
+/// JSON di qua file (`agents_file`) vi PowerShell 5.1 lam hong dau `"` khi truyen cho exe.
+pub fn launch_spec(d: &Department, agent_id: &str, agents_file: &Path, notes_root: Option<&str>) -> Result<LaunchSpec, String> {
+    let agent = d.agent_defs.iter().find(|a| a.id == agent_id).ok_or(format!("khong co agent {agent_id}"))?;
+    // Lead goi subagent nen phien can du tool cua ca phong; agent khac chi can tool cua minh.
+    let mut tools: Vec<&str> = vec![];
+    let pool: Vec<&AgentDef> = if agent_id == d.config.lead { d.agent_defs.iter().collect() } else { vec![agent] };
+    for t in pool.iter().flat_map(|a| &a.tools) {
+        if !tools.contains(&t.as_str()) {
+            tools.push(t);
+        }
+    }
+    let mut args = format!(
+        "--agent {agent_id} --agents '{}' --permission-mode auto --strict-mcp-config --tools {}",
+        agents_file.display(),
+        tools.join(" ")
+    );
+    if let Some(n) = notes_root.filter(|n| !n.is_empty()) {
+        args += &format!(" --add-dir '{}'", Path::new(n).join("ClaudeDeck").display());
+    }
+    let mut deny: Vec<&str> = DENY_ALL.to_vec();
+    if agent_id == "reviewer" {
+        deny.extend(DENY_REVIEWER);
+    }
+    Ok(LaunchSpec { args, settings: serde_json::json!({ "permissions": { "deny": deny } }) })
+}
+
+#[tauri::command]
+pub fn office_launch(root: String, dept: String, agent: String, notes_root: Option<String>) -> Result<LaunchSpec, String> {
+    let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept).ok_or(format!("khong co phong {dept}"))?;
+    let file = std::env::temp_dir().join(format!("claudedeck-agents-{dept}.json"));
+    std::fs::write(&file, agents_json(&d).to_string()).map_err(err)?;
+    if let Some(n) = notes_root.as_deref().filter(|n| !n.is_empty()) {
+        std::fs::create_dir_all(Path::new(n).join("ClaudeDeck")).map_err(err)?;
+    }
+    launch_spec(&d, &agent, &file, notes_root.as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,6 +308,55 @@ mod tests {
         assert_eq!(d.config.workspace, "H:\\proj");
         assert_eq!(d.config.agents.len(), 4);
         assert_eq!(d.config.status.len(), 4);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn software_dev(name: &str) -> (PathBuf, Department) {
+        let root = tmp(name);
+        seed_office(&root).unwrap();
+        let d = load_office(&root).into_iter().find(|d| d.config.id == "software-dev").unwrap();
+        (root, d)
+    }
+
+    fn deny(s: &LaunchSpec) -> Vec<String> {
+        serde_json::from_value(s.settings["permissions"]["deny"].clone()).unwrap()
+    }
+
+    #[test]
+    fn launch_spec_for_reviewer() {
+        let (root, d) = software_dev("ls-rev");
+        let s = launch_spec(&d, "reviewer", Path::new("C:\\t\\a.json"), None).unwrap();
+        assert!(s.args.starts_with("--agent reviewer --agents 'C:\\t\\a.json' --permission-mode auto --strict-mcp-config --tools "));
+        assert!(!s.args.contains("dangerously"));
+        assert!(!s.args.contains("--add-dir"));
+        let d = deny(&s);
+        for x in ["Bash(git push:*)", "WebFetch", "Edit", "Write"] {
+            assert!(d.contains(&x.to_string()), "{x}");
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn launch_spec_dev_can_edit() {
+        let (root, d) = software_dev("ls-dev");
+        let d = deny(&launch_spec(&d, "dev", Path::new("a.json"), None).unwrap());
+        assert!(!d.contains(&"Edit".to_string()));
+        assert!(d.contains(&"Bash(git push:*)".to_string()));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn launch_spec_quotes_paths_with_spaces() {
+        let (root, d) = software_dev("ls-space");
+        let s = launch_spec(&d, "dev", Path::new("a.json"), Some("H:\\My Notes\\Vault")).unwrap();
+        assert!(s.args.ends_with("--add-dir 'H:\\My Notes\\Vault\\ClaudeDeck'"), "{}", s.args);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn launch_spec_unknown_agent_errors() {
+        let (root, d) = software_dev("ls-ghost");
+        assert!(launch_spec(&d, "ghost", Path::new("a.json"), None).is_err());
         fs::remove_dir_all(&root).unwrap();
     }
 }

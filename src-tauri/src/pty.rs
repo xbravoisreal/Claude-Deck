@@ -46,11 +46,12 @@ fn signal_port(app: &AppHandle) -> u16 {
     })
 }
 
-/// Ghi file settings chua hook Stop + Notification tro ve signal server, tra ve duong dan.
-fn hook_settings(app: &AppHandle, id: &str) -> Result<String, String> {
+/// Ghi file settings chua hook Stop + Notification tro ve signal server (gop vao `extra`), tra ve duong dan.
+fn hook_settings(app: &AppHandle, id: &str, extra: Option<serde_json::Value>) -> Result<String, String> {
     let cmd = format!("curl.exe -s -m 2 http://127.0.0.1:{}/{id}", signal_port(app));
     let hook = serde_json::json!([{ "hooks": [{ "type": "command", "command": cmd }] }]);
-    let settings = serde_json::json!({ "hooks": { "Stop": hook, "Notification": hook } });
+    let mut settings = extra.filter(|v| v.is_object()).unwrap_or_else(|| serde_json::json!({}));
+    settings["hooks"] = serde_json::json!({ "Stop": hook, "Notification": hook });
     let path = std::env::temp_dir().join(format!("claudedeck-hooks-{id}.json"));
     std::fs::write(&path, settings.to_string()).map_err(err)?;
     Ok(path.to_string_lossy().into_owned())
@@ -68,6 +69,7 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
     args: Option<String>,
+    settings: Option<serde_json::Value>,
 ) -> Result<(), String> {
     let pair = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -76,7 +78,7 @@ pub fn pty_spawn(
     let mut cmd = CommandBuilder::new("powershell.exe");
     cmd.arg("-NoLogo");
     if kind == "chat" {
-        let settings = hook_settings(&app, &id)?;
+        let settings = hook_settings(&app, &id, settings)?;
         let claude = format!("claude --settings '{settings}' {}", args.unwrap_or_default());
         cmd.args(["-NoExit", "-Command", &claude]);
     }
