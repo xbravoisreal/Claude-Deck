@@ -98,6 +98,54 @@ pub fn agents_json(d: &Department) -> serde_json::Value {
     m.into()
 }
 
+/// Du lieu mac dinh: (duong dan tuong doi trong root, noi dung).
+const SEED: &[(&str, &str)] = &[
+    ("departments/software-dev/department.json", include_str!("../office-seed/departments/software-dev/department.json")),
+    ("departments/software-dev/agents/tech-lead.md", include_str!("../office-seed/departments/software-dev/agents/tech-lead.md")),
+    ("departments/software-dev/agents/dev.md", include_str!("../office-seed/departments/software-dev/agents/dev.md")),
+    ("departments/software-dev/agents/reviewer.md", include_str!("../office-seed/departments/software-dev/agents/reviewer.md")),
+    ("departments/software-dev/agents/qa.md", include_str!("../office-seed/departments/software-dev/agents/qa.md")),
+    ("departments/hr/department.json", include_str!("../office-seed/departments/hr/department.json")),
+    ("departments/hr/agents/recruiter.md", include_str!("../office-seed/departments/hr/agents/recruiter.md")),
+];
+
+/// Ghi du lieu mac dinh, chi nhung file chua ton tai (khong de len ban nguoi dung da sua).
+pub fn seed_office(root: &Path) -> std::io::Result<()> {
+    for (rel, content) in SEED {
+        let p = root.join(rel);
+        if !p.exists() {
+            std::fs::create_dir_all(p.parent().unwrap())?;
+            std::fs::write(p, content)?;
+        }
+    }
+    Ok(())
+}
+
+fn err<E: ToString>(e: E) -> String {
+    e.to_string()
+}
+
+#[tauri::command]
+pub fn office_root() -> String {
+    dirs::config_dir().unwrap_or_default().join("claudedeck").join("office").to_string_lossy().into_owned()
+}
+
+#[tauri::command]
+pub fn office_load(root: String) -> Result<Vec<Department>, String> {
+    let root = Path::new(&root);
+    seed_office(root).map_err(err)?;
+    Ok(load_office(root))
+}
+
+/// Chi doi truong `workspace`, giu nguyen cac truong khac (ke ca truong nguoi dung tu them).
+#[tauri::command]
+pub fn office_set_workspace(root: String, dept: String, workspace: String) -> Result<(), String> {
+    let p = Path::new(&root).join("departments").join(&dept).join("department.json");
+    let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).map_err(err)?).map_err(err)?;
+    v["workspace"] = workspace.into();
+    std::fs::write(&p, serde_json::to_string_pretty(&v).map_err(err)?).map_err(err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +215,41 @@ mod tests {
         dept(&root, &["ok"], &[("ok", &format!("---\ndescription: d\n---\n{prompt}"))]);
         let d = &load_office(&root)[0];
         assert_eq!(agents_json(d)["ok"]["prompt"], prompt);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn seed_creates_two_departments() {
+        let root = tmp("seed");
+        seed_office(&root).unwrap();
+        let o = load_office(&root);
+        assert_eq!(o.iter().map(|d| d.config.id.as_str()).collect::<Vec<_>>(), vec!["hr", "software-dev"]);
+        assert_eq!(o[1].agent_defs.len(), 4);
+        assert!(o.iter().all(|d| d.errors.is_empty()));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn seed_does_not_overwrite() {
+        let root = tmp("seed-keep");
+        seed_office(&root).unwrap();
+        let dev = root.join("departments/software-dev/agents/dev.md");
+        fs::write(&dev, "---\nname: Dev2\ndescription: d\n---\nx").unwrap();
+        seed_office(&root).unwrap();
+        assert_eq!(parse_agent("dev", &fs::read_to_string(&dev).unwrap()).unwrap().name, "Dev2");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn set_workspace_persists() {
+        let root = tmp("ws");
+        seed_office(&root).unwrap();
+        let r = root.to_string_lossy().to_string();
+        office_set_workspace(r, "software-dev".into(), "H:\\proj".into()).unwrap();
+        let d = load_office(&root).into_iter().find(|d| d.config.id == "software-dev").unwrap();
+        assert_eq!(d.config.workspace, "H:\\proj");
+        assert_eq!(d.config.agents.len(), 4);
+        assert_eq!(d.config.status.len(), 4);
         fs::remove_dir_all(&root).unwrap();
     }
 }

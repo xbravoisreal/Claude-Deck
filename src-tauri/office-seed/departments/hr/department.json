@@ -1,0 +1,11 @@
+{
+  "id": "hr",
+  "name": "HR",
+  "icon": "🧑‍💼",
+  "mission": "Tuyen, sua, danh gia va cho nghi viec Agent.",
+  "workspace": "",
+  "lead": "recruiter",
+  "agents": ["recruiter"],
+  "status": { "recruiter": "active" },
+  "defaults": { "maxTokens": 4000000 }
+}

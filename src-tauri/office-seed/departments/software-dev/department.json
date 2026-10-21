@@ -1,0 +1,11 @@
+{
+  "id": "software-dev",
+  "name": "Software Development",
+  "icon": "💻",
+  "mission": "Bien yeu cau thanh code da review va test.",
+  "workspace": "",
+  "lead": "tech-lead",
+  "agents": ["tech-lead", "dev", "reviewer", "qa"],
+  "status": { "tech-lead": "active", "dev": "active", "reviewer": "active", "qa": "active" },
+  "defaults": { "maxTokens": 4000000 }
+}
