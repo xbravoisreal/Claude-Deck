@@ -1,6 +1,9 @@
-use crate::office::{load_office, Department};
+use crate::history::project_dir;
+use crate::office::{load_office, prepare_launch, Department};
+use crate::pty::ps_quote;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::RandomState;
+use std::collections::HashSet;
 use std::hash::{BuildHasher, Hasher};
 use std::io::Write;
 use std::path::Path;
@@ -260,10 +263,127 @@ pub fn task_stop(root: String, id: String, reason: String) -> Result<Task, Strin
     })
 }
 
+/// Tham so rieng cua task. Prompt dung dau: `--add-dir`/`--tools` nhan nhieu gia tri nen se nuot prompt dung sau.
+/// reopen = mo lai phien da co (khong gui prompt).
+pub fn task_args(t: &Task, reopen: bool) -> String {
+    let dir = Path::new(&t.dir);
+    let add = format!("--add-dir {}", ps_quote(&t.dir));
+    if reopen {
+        return format!("--resume {} {add}", t.session);
+    }
+    let brief = dir.join("brief.md").to_string_lossy().into_owned();
+    if t.started {
+        let p = format!("Lam lai task {}: doc nhan xet moi o cuoi {brief}.", t.id);
+        return format!("{} --resume {} {add}", ps_quote(&p), t.session);
+    }
+    let p = format!(
+        "Task {}: doc {brief} roi lam. Xong thi ghi {}: 2 dong dau la tom tat, sau do chi tiet. Can hoi sep thi hoi roi dung, khong ghi result.md.",
+        t.id,
+        dir.join("result.md").to_string_lossy()
+    );
+    format!("{} --session-id {} {add}", ps_quote(&p), t.session)
+}
+
+fn start(depts: &[Department], t: &Task, reopen: bool, notes: Option<&str>) -> Result<Started, String> {
+    let d = depts.iter().find(|d| d.config.id == t.dept).ok_or(format!("khong co phong {}", t.dept))?;
+    let name = d.agent_defs.iter().find(|a| a.id == t.agent).map_or(t.agent.as_str(), |a| a.name.as_str());
+    let l = prepare_launch(d, &t.agent, notes)?;
+    Ok(Started {
+        task: t.clone(),
+        label: format!("{} {name} · {}", d.config.icon, t.title),
+        args: format!("{} {}", task_args(t, reopen), l.args),
+        settings: l.settings,
+    })
+}
+
+#[derive(Serialize)]
+pub struct Started {
+    pub task: Task,
+    pub label: String,
+    pub args: String,
+    pub settings: serde_json::Value,
+}
+
+#[derive(Serialize, Default, Debug, PartialEq)]
+pub struct Stats {
+    pub context: u64,
+    pub cache_read: u64,
+    pub max_tokens: u64,
+}
+
+/// context = do dai ngu canh cua luot cuoi; cache_read cong don, moi message.id tinh mot lan (stream ghi nhieu dong).
+/// ponytail: doc lai ca file moi lan, doc tang dan theo offset neu transcript qua lon.
+pub fn session_stats(jsonl: &Path) -> Stats {
+    let mut st = Stats::default();
+    let Ok(s) = std::fs::read_to_string(jsonl) else { return st };
+    let mut seen = HashSet::new();
+    for line in s.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let u = &v["message"]["usage"];
+        if v["type"] != "assistant" || !u.is_object() {
+            continue;
+        }
+        let g = |k: &str| u[k].as_u64().unwrap_or(0);
+        st.context = g("input_tokens") + g("cache_read_input_tokens") + g("cache_creation_input_tokens");
+        let id = v["message"]["id"].as_str().unwrap_or("");
+        if id.is_empty() || seen.insert(id.to_string()) {
+            st.cache_read += g("cache_read_input_tokens");
+        }
+    }
+    st
+}
+
+/// Chay cac task backlog den luot; task loi khoi chay -> waiting kem ly do.
+#[tauri::command]
+pub fn task_start_next(root: String, max_live: usize, notes_root: Option<String>) -> Result<Vec<Started>, String> {
+    let depts = load_office(Path::new(&root));
+    with_tasks(Path::new(&root), |ts| {
+        let mut out = vec![];
+        for id in schedule(ts, max_live) {
+            let t = ts.iter_mut().find(|t| t.id == id).unwrap();
+            match start(&depts, t, false, notes_root.as_deref()) {
+                Ok(mut s) => {
+                    t.status = "running".into();
+                    t.started = true;
+                    s.task = t.clone();
+                    out.push(s);
+                }
+                Err(e) => {
+                    t.status = "waiting".into();
+                    t.reason = e;
+                }
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// Mo lai phien cua task da dong (Cho sip, app vua mo lai...). Khong doi trang thai.
+#[tauri::command]
+pub fn task_resume(root: String, id: String, notes_root: Option<String>) -> Result<Started, String> {
+    let t = load_tasks(Path::new(&root))?.into_iter().find(|t| t.id == id).ok_or(format!("khong co task {id}"))?;
+    if !t.started {
+        return Err("task chua chay lan nao".into());
+    }
+    start(&load_office(Path::new(&root)), &t, true, notes_root.as_deref())
+}
+
+#[tauri::command]
+pub fn task_stats(root: String, id: String) -> Result<Stats, String> {
+    let t = load_tasks(Path::new(&root))?.into_iter().find(|t| t.id == id).ok_or(format!("khong co task {id}"))?;
+    let mut st = match project_dir(&t.cwd) {
+        Some(p) => session_stats(&p.join(format!("{}.jsonl", t.session))),
+        None => Stats::default(),
+    };
+    let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == t.dept);
+    st.max_tokens = d.and_then(|d| d.config.defaults["maxTokens"].as_u64()).unwrap_or(4_000_000);
+    Ok(st)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::office::seed_office;
+    use crate::office::{office_set_workspace, seed_office};
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -431,6 +551,52 @@ mod tests {
         fs::write(root.join("tasks.json"), "{ hong").unwrap();
         assert!(with_tasks(&root, |_| Ok(())).is_err());
         assert_eq!(fs::read_to_string(root.join("tasks.json")).unwrap(), "{ hong"); // khong ghi de
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn task_args_first_and_resume() {
+        let mut t = task("a1", "dev", "backlog", 1);
+        t.session = "sid".into();
+        t.dir = "C:\\Bob's\\a1".into();
+        let a = task_args(&t, false);
+        assert!(a.starts_with("'Task a1: doc C:\\Bob''s\\a1\\brief.md"), "{a}"); // prompt dung truoc option variadic
+        assert!(a.contains("--session-id sid") && a.contains("--add-dir 'C:\\Bob''s\\a1'") && !a.contains("--resume"), "{a}");
+        t.started = true;
+        let a = task_args(&t, false);
+        assert!(a.starts_with("'Lam lai task a1") && a.contains("--resume sid"), "{a}");
+        let a = task_args(&t, true);
+        assert!(a.starts_with("--resume sid --add-dir"), "{a}"); // mo lai: khong kem prompt
+    }
+
+    #[test]
+    fn start_next_marks_running() {
+        let (root, _ws, d) = setup("start", true);
+        let office = root.join("office");
+        let r = office.to_string_lossy().to_string();
+        office_set_workspace(r.clone(), "software-dev".into(), d.config.workspace.clone()).unwrap();
+        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "y".into(), None).unwrap();
+        let s = task_start_next(r.clone(), 3, None).unwrap();
+        assert_eq!(s.len(), 1);
+        assert!(s[0].args.contains("--agent 'office:dev'") && s[0].args.contains(&format!("--session-id {}", t.session)), "{}", s[0].args);
+        assert!(!s[0].args.contains("dangerously"));
+        assert_eq!(s[0].task.status, "running");
+        assert!(s[0].task.started);
+        assert!(task_start_next(r, 3, None).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stats_dedupes_message_ids() {
+        let root = tmp("stats");
+        let p = root.join("s.jsonl");
+        let line = |id: &str, inp: u64, read: u64, cre: u64| {
+            serde_json::json!({"type":"assistant","message":{"id":id,"usage":{"input_tokens":inp,"cache_read_input_tokens":read,"cache_creation_input_tokens":cre}}}).to_string()
+        };
+        let user = serde_json::json!({"type":"user","message":{"content":"hi"}}).to_string();
+        fs::write(&p, [line("m1", 1, 100, 0), line("m1", 1, 100, 0), user, line("m2", 5, 300, 10), "hong".into()].join("\n")).unwrap();
+        assert_eq!(session_stats(&p), Stats { context: 315, cache_read: 400, max_tokens: 0 });
+        assert_eq!(session_stats(&root.join("none.jsonl")), Stats::default());
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -219,15 +219,20 @@ pub fn launch_spec(d: &Department, agent_id: &str, plugin_dir: &Path, notes_root
     Ok(LaunchSpec { args, settings: serde_json::json!({ "permissions": { "deny": deny } }) })
 }
 
+/// Ghi plugin tam cua phong + thu muc notes, roi dung tham so khoi chay.
+pub fn prepare_launch(d: &Department, agent: &str, notes_root: Option<&str>) -> Result<LaunchSpec, String> {
+    let dir = std::env::temp_dir().join(format!("claudedeck-plugin-{}", d.config.id));
+    write_plugin(d, &dir).map_err(err)?;
+    if let Some(n) = notes_root.filter(|n| !n.is_empty()) {
+        std::fs::create_dir_all(Path::new(n).join("ClaudeDeck")).map_err(err)?;
+    }
+    launch_spec(d, agent, &dir, notes_root)
+}
+
 #[tauri::command]
 pub fn office_launch(root: String, dept: String, agent: String, notes_root: Option<String>) -> Result<LaunchSpec, String> {
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept).ok_or(format!("khong co phong {dept}"))?;
-    let dir = std::env::temp_dir().join(format!("claudedeck-plugin-{dept}"));
-    write_plugin(&d, &dir).map_err(err)?;
-    if let Some(n) = notes_root.as_deref().filter(|n| !n.is_empty()) {
-        std::fs::create_dir_all(Path::new(n).join("ClaudeDeck")).map_err(err)?;
-    }
-    launch_spec(&d, &agent, &dir, notes_root.as_deref())
+    prepare_launch(&d, &agent, notes_root.as_deref())
 }
 
 #[cfg(test)]
