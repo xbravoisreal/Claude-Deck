@@ -10,7 +10,7 @@ pub struct Entry {
 }
 
 /// Thu muc transcript cua claude: ~/.claude/projects/<cwd, ky tu khong phai chu/so thanh '-'>.
-fn project_dir(cwd: &str) -> Option<PathBuf> {
+pub fn project_dir(cwd: &str) -> Option<PathBuf> {
     let name: String = cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
     Some(dirs::home_dir()?.join(".claude").join("projects").join(name))
 }

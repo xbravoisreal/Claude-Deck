@@ -3,6 +3,7 @@ mod clip;
 mod history;
 mod office;
 mod pty;
+mod tasks;
 mod usage;
 
 pub fn run() {
@@ -23,6 +24,13 @@ pub fn run() {
             office::office_load,
             office::office_set_workspace,
             office::office_launch,
+            tasks::task_list,
+            tasks::task_create,
+            tasks::task_idle,
+            tasks::task_busy,
+            tasks::task_approve,
+            tasks::task_rework,
+            tasks::task_stop,
             open_in_editor,
             accounts::list_accounts,
             accounts::switch_account,
