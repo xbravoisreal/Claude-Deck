@@ -31,6 +31,7 @@ pub fn run() {
             tasks::task_approve,
             tasks::task_rework,
             tasks::task_stop,
+            tasks::task_cancel,
             tasks::task_start_next,
             tasks::task_resume,
             tasks::task_stats,

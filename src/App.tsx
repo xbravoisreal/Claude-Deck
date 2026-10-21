@@ -20,7 +20,7 @@ const MODELS = ["default", "opus", "sonnet", "haiku"];
 const base = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-function Workspace({ ws, on, active, onFocus, onIdle, onEnter, onRatio, prefs, onPrefs }: { ws: Ws; on: boolean; active: boolean; onFocus: () => void; onIdle: () => void; onEnter: () => void; onRatio: (r: number) => void; prefs: Prefs; onPrefs: (p: Partial<Prefs>) => void }) {
+function Workspace({ ws, on, active, onFocus, onIdle, onEnter, onRatio, prefs, onPrefs }: { ws: Ws; on: boolean; active: boolean; onFocus: () => void; onIdle: (stop: boolean) => void; onEnter: () => void; onRatio: (r: number) => void; prefs: Prefs; onPrefs: (p: Partial<Prefs>) => void }) {
   const [chat, setChat] = useState<Chat>({ n: 0 });
   const [model, setModel] = useState(prefs.model);
   const [auto, setAuto] = useState(prefs.auto);
@@ -214,11 +214,11 @@ export default function App() {
     })();
   }, [ready, office.root]);
 
-  const onIdle = (ws: Ws) => {
+  const onIdle = (ws: Ws, stop: boolean) => {
     alert(ws.id);
     if (!ws.task) return;
     const was = tasksRef.current.find((t) => t.id === ws.task)?.status;
-    invoke<Task>("task_idle", { root: root(), id: ws.task }).then((t) => {
+    invoke<Task>("task_idle", { root: root(), id: ws.task, stop }).then((t) => {
       // Vua chuyen sang Cho sip: dong PTY giai phong cho (mo lai bang --resume). Tab mo lai tu ☰ thi giu.
       if (t.status === "review" && was !== "review") closeTaskTab(t.id);
       return startNext();
@@ -236,6 +236,10 @@ export default function App() {
   const rework = (t: Task, note: string) => {
     closeTaskTab(t.id);
     invoke("task_rework", { root: root(), id: t.id, note }).then(startNext, fail);
+  };
+  const cancel = (t: Task) => {
+    closeTaskTab(t.id);
+    invoke("task_cancel", { root: root(), id: t.id }).then(startNext, fail);
   };
   const openTask = async (t: Task) => {
     const tab = tabsRef.current.find((x) => x.task === t.id);
@@ -329,7 +333,7 @@ export default function App() {
             on={view === "terminal" && (split || t.id === active)}
             active={split && t.id === active}
             onFocus={() => activate(t.id)}
-            onIdle={() => onIdle(t)}
+            onIdle={(stop) => onIdle(t, stop)}
             onEnter={() => onEnter(t)}
             onRatio={setRatio}
             prefs={prefs}
@@ -337,7 +341,7 @@ export default function App() {
           />
         ))}
       </div>
-      {drawer && <Drawer tasks={tasks} names={names} onApprove={approve} onRework={rework} onOpen={openTask} onClose={() => setDrawer(false)} />}
+      {drawer && <Drawer tasks={tasks} names={names} onApprove={approve} onRework={rework} onCancel={cancel} onOpen={openTask} onClose={() => setDrawer(false)} />}
       {settings && <Settings value={office} onSave={setOffice} onClose={() => setSettings(false)} />}
       <UsageFooter />
     </div>

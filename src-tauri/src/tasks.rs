@@ -28,6 +28,9 @@ pub struct Task {
     pub created: i64,
     #[serde(default)]
     pub started: bool,
+    /// Muc cache_read luc sep cho chay tiep sau khi vuot tran; tran = maxTokens + cap_base.
+    #[serde(default)]
+    pub cap_base: u64,
     #[serde(default, skip_deserializing)]
     pub summary: String,
 }
@@ -56,19 +59,23 @@ pub fn with_tasks<R>(root: &Path, f: impl FnOnce(&mut Vec<Task>) -> Result<R, St
     Ok(r)
 }
 
-/// Chay git trong `dir`, khong bat cua so console. None neu loi.
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
+/// Chay git trong `dir`, khong bat cua so console. Loi -> stderr.
+fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let mut c = Command::new("git");
     c.arg("-C").arg(dir).args(args);
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000);
-    let o = c.output().ok()?;
-    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    let o = c.output().map_err(err)?;
+    if o.status.success() {
+        Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&o.stderr).trim().to_string())
+    }
 }
 
 /// Them `.office/` vao .git/info/exclude (khong dung toi .gitignore duoc track).
 fn exclude_office(ws: &Path) {
-    let Some(p) = git(ws, &["rev-parse", "--git-path", "info/exclude"]) else { return };
+    let Ok(p) = git(ws, &["rev-parse", "--git-path", "info/exclude"]) else { return };
     let p = ws.join(p);
     let cur = std::fs::read_to_string(&p).unwrap_or_default();
     if !cur.lines().any(|l| l.trim() == ".office/") {
@@ -97,6 +104,15 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
         n += 1;
         id = format!("{stamp}-{n}");
     }
+    // Chi lam thang trong workspace khi no khong phai git repo; repo ma tao worktree loi thi bao loi (khong mat cach ly).
+    let tree = trees.join(&id);
+    let cwd = if git(ws, &["rev-parse", "--is-inside-work-tree"]).is_ok() {
+        git(ws, &["worktree", "add", &tree.to_string_lossy(), "-b", &format!("office/{id}")]).map_err(|e| format!("tao worktree loi: {e}"))?;
+        exclude_office(ws);
+        tree
+    } else {
+        ws.to_path_buf()
+    };
     let dir = base.join(&id);
     std::fs::create_dir_all(&dir).map_err(err)?;
     let brief = format!(
@@ -105,15 +121,6 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
         now.to_rfc3339()
     );
     std::fs::write(dir.join("brief.md"), brief).map_err(err)?;
-    let tree = trees.join(&id);
-    let branch = format!("office/{id}");
-    let cwd = match git(ws, &["worktree", "add", &tree.to_string_lossy(), "-b", &branch]) {
-        Some(_) => {
-            exclude_office(ws);
-            tree
-        }
-        None => ws.to_path_buf(), // khong phai git repo: lam thang trong workspace
-    };
     Ok(Task {
         id,
         dept: d.config.id.clone(),
@@ -126,6 +133,7 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
         cwd: cwd.to_string_lossy().into_owned(),
         created: now.timestamp_millis(),
         started: false,
+        cap_base: 0,
         summary: String::new(),
     })
 }
@@ -153,10 +161,32 @@ pub fn schedule(tasks: &[Task], max_live: usize) -> Vec<String> {
     out
 }
 
-/// Phien ranh (hook Stop/Notification): co result.md -> Cho sip, khong -> dang hoi sep.
-pub fn mark_idle(t: &mut Task) {
+/// Phien ranh. stop = hook Stop (het luot): co result.md -> Cho sip, khong -> dang hoi sep.
+/// Hook Notification (xin quyen / ranh lau) giua luot -> chi waiting, khong bao gio Cho sip (tranh dong PTY khi Agent con lam).
+pub fn mark_idle(t: &mut Task, stop: bool) {
     if live(t) {
-        t.status = if Path::new(&t.dir).join("result.md").exists() { "review" } else { "waiting" }.into();
+        t.status = if stop && Path::new(&t.dir).join("result.md").exists() { "review" } else { "waiting" }.into();
+        t.reason.clear();
+    }
+}
+
+/// Sep huy task (bo, khong lam nua): giai phong cho trong hang doi.
+pub fn cancel(t: &mut Task) -> Result<(), String> {
+    if !(live(t) || t.status == "backlog") {
+        return Err("da xu ly roi".into());
+    }
+    t.status = "done".into();
+    t.reason = "da huy".into();
+    Ok(())
+}
+
+/// Sep tra loi trong terminal -> lam tiep. Neu dang dung vi vuot tran: tran moi tinh tu muc da dung.
+pub fn resume_busy(t: &mut Task, cache_read: u64) {
+    if t.status == "waiting" {
+        if t.reason == "vuot tran" {
+            t.cap_base = cache_read;
+        }
+        t.status = "running".into();
         t.reason.clear();
     }
 }
@@ -200,11 +230,11 @@ fn summary(dir: &str) -> String {
 
 /// Sua mot task theo id, tra ve ban sau khi sua.
 fn update(root: &str, id: &str, f: impl FnOnce(&mut Task) -> Result<(), String>) -> Result<Task, String> {
-    with_tasks(Path::new(root), |ts| {
-        let t = ts.iter_mut().find(|t| t.id == id).ok_or(format!("khong co task {id}"))?;
-        f(t)?;
-        Ok(t.clone())
-    })
+    update_with(root, id, |t| f(t).map(|_| t.clone()))
+}
+
+fn update_with<R>(root: &str, id: &str, f: impl FnOnce(&mut Task) -> Result<R, String>) -> Result<R, String> {
+    with_tasks(Path::new(root), |ts| f(ts.iter_mut().find(|t| t.id == id).ok_or(format!("khong co task {id}"))?))
 }
 
 #[tauri::command]
@@ -225,20 +255,19 @@ pub fn task_create(root: String, dept: String, agent: String, title: String, bod
 }
 
 #[tauri::command]
-pub fn task_idle(root: String, id: String) -> Result<Task, String> {
-    update(&root, &id, |t| Ok(mark_idle(t)))
+pub fn task_idle(root: String, id: String, stop: bool) -> Result<Task, String> {
+    update(&root, &id, |t| Ok(mark_idle(t, stop)))
 }
 
-/// Sep tra loi trong terminal -> Agent lam tiep.
 #[tauri::command]
 pub fn task_busy(root: String, id: String) -> Result<Task, String> {
-    update(&root, &id, |t| {
-        if t.status == "waiting" {
-            t.status = "running".into();
-            t.reason.clear();
-        }
-        Ok(())
-    })
+    let read = task_stats(root.clone(), id.clone()).map_or(0, |s| s.cache_read);
+    update(&root, &id, |t| Ok(resume_busy(t, read)))
+}
+
+#[tauri::command]
+pub fn task_cancel(root: String, id: String) -> Result<Task, String> {
+    update(&root, &id, cancel)
 }
 
 #[tauri::command]
@@ -358,14 +387,21 @@ pub fn task_start_next(root: String, max_live: usize, notes_root: Option<String>
     })
 }
 
-/// Mo lai phien cua task da dong (Cho sip, app vua mo lai...). Khong doi trang thai.
+/// Mo lai phien cua task da dong (Cho sip, app vua mo lai...): khong doi trang thai.
+/// Task chua tung chay duoc (khoi chay loi) -> chay moi tu dau.
 #[tauri::command]
 pub fn task_resume(root: String, id: String, notes_root: Option<String>) -> Result<Started, String> {
-    let t = load_tasks(Path::new(&root))?.into_iter().find(|t| t.id == id).ok_or(format!("khong co task {id}"))?;
-    if !t.started {
-        return Err("task chua chay lan nao".into());
-    }
-    start(&load_office(Path::new(&root)), &t, true, notes_root.as_deref())
+    let depts = load_office(Path::new(&root));
+    update_with(&root, &id, |t| {
+        let mut s = start(&depts, t, t.started, notes_root.as_deref())?;
+        if !t.started {
+            t.started = true;
+            t.status = "running".into();
+            t.reason.clear();
+            s.task = t.clone();
+        }
+        Ok(s)
+    })
 }
 
 #[tauri::command]
@@ -376,7 +412,7 @@ pub fn task_stats(root: String, id: String) -> Result<Stats, String> {
         None => Stats::default(),
     };
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == t.dept);
-    st.max_tokens = d.and_then(|d| d.config.defaults["maxTokens"].as_u64()).unwrap_or(4_000_000);
+    st.max_tokens = d.and_then(|d| d.config.defaults["maxTokens"].as_u64()).unwrap_or(4_000_000) + t.cap_base;
     Ok(st)
 }
 
@@ -428,6 +464,7 @@ mod tests {
             cwd: String::new(),
             created,
             started: false,
+            cap_base: 0,
             summary: String::new(),
         }
     }
@@ -500,13 +537,13 @@ mod tests {
         let root = tmp("idle");
         let mut t = task("a", "dev", "running", 1);
         t.dir = root.to_string_lossy().into_owned();
-        mark_idle(&mut t);
+        mark_idle(&mut t, true);
         assert_eq!(t.status, "waiting");
         fs::write(root.join("result.md"), "xong").unwrap();
-        mark_idle(&mut t);
+        mark_idle(&mut t, true);
         assert_eq!(t.status, "review");
         t.status = "done".into();
-        mark_idle(&mut t); // tin hieu tre khong keo task da duyet ve
+        mark_idle(&mut t, true); // tin hieu tre khong keo task da duyet ve
         assert_eq!(t.status, "done");
         let _ = fs::remove_dir_all(&root);
     }
@@ -537,7 +574,7 @@ mod tests {
         assert!(!root.join("result.md").exists());
         assert!(root.join("result.prev.md").exists());
         t.status = "running".into();
-        mark_idle(&mut t);
+        mark_idle(&mut t, true);
         assert_eq!(t.status, "waiting");
         assert!(rework(&mut t, "x").is_err());
         let _ = fs::remove_dir_all(&root);
@@ -552,6 +589,67 @@ mod tests {
         assert!(with_tasks(&root, |_| Ok(())).is_err());
         assert_eq!(fs::read_to_string(root.join("tasks.json")).unwrap(), "{ hong"); // khong ghi de
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn create_task_errors_when_worktree_fails() {
+        let (root, ws, d) = setup("wtfail", true);
+        fs::create_dir_all(ws.join(".office")).unwrap();
+        fs::write(ws.join(".office/worktrees"), "").unwrap(); // worktree add chac chan hong
+        let e = create_task(&d, "dev", "x", "", None).unwrap_err(); // khong duoc lam thang tren checkout cua sep
+        assert!(e.contains("worktree"), "{e}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn notify_never_moves_to_review() {
+        let root = tmp("notify");
+        fs::write(root.join("result.md"), "xong").unwrap();
+        let mut t = task("a", "dev", "running", 1);
+        t.dir = root.to_string_lossy().into_owned();
+        mark_idle(&mut t, false); // xin quyen giua chung, result.md co tu truoc
+        assert_eq!(t.status, "waiting");
+        mark_idle(&mut t, true);
+        assert_eq!(t.status, "review");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cancel_frees_slot() {
+        let mut t = task("a", "dev", "waiting", 1);
+        cancel(&mut t).unwrap();
+        assert_eq!((t.status.as_str(), t.reason.as_str()), ("done", "da huy"));
+        assert!(schedule(&[t.clone(), task("b", "dev", "backlog", 2)], 1) == vec!["b"]);
+        assert!(cancel(&mut t).is_err());
+    }
+
+    #[test]
+    fn resume_unstarted_task_starts_it() {
+        let (root, _ws, d) = setup("resume0", true);
+        let r = root.join("office").to_string_lossy().to_string();
+        office_set_workspace(r.clone(), "software-dev".into(), d.config.workspace.clone()).unwrap();
+        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "".into(), None).unwrap();
+        task_stop_any(&r, &t.id); // gia lap khoi chay loi: waiting, started=false
+        let s = task_resume(r.clone(), t.id.clone(), None).unwrap();
+        assert!(s.args.contains("--session-id") && !s.args.contains("--resume"), "{}", s.args);
+        let t = load_tasks(Path::new(&r)).unwrap().into_iter().next().unwrap();
+        assert!(t.started && t.status == "running");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn task_stop_any(root: &str, id: &str) {
+        update(root, id, |t| Ok((t.status = "waiting".into(), t.reason = "loi".into()).0)).unwrap();
+    }
+
+    #[test]
+    fn busy_after_cap_raises_budget() {
+        let mut t = task("a", "dev", "waiting", 1);
+        t.reason = "vuot tran".into();
+        resume_busy(&mut t, 5_000_000);
+        assert_eq!((t.status.as_str(), t.cap_base), ("running", 5_000_000));
+        let mut w = task("b", "dev", "waiting", 1); // cho vi ly do khac: khong doi ngan sach
+        resume_busy(&mut w, 9);
+        assert_eq!((w.status.as_str(), w.cap_base), ("running", 0));
     }
 
     #[test]

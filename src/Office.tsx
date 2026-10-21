@@ -23,6 +23,7 @@ export default function Office({ prefs, tasks, ctx, onOpen, onTasks, onDepts }: 
   const [depts, setDepts] = useState<Dept[]>([]);
   const [error, setError] = useState("");
   const [assign, setAssign] = useState<{ dept: Dept; agent: AgentDef; title: string; body: string } | null>(null);
+  const [sending, setSending] = useState(false);
 
   const reload = () =>
     invoke<Dept[]>("office_load", { root: prefs.root }).then((d) => (setDepts(d), onDepts(d)), (e) => setError(String(e)));
@@ -49,11 +50,16 @@ export default function Office({ prefs, tasks, ctx, onOpen, onTasks, onDepts }: 
 
   const submit = () =>
     safe(async () => {
-      if (!assign || !assign.title.trim()) return;
-      if (!assign.dept.workspace && !(await pickWorkspace(assign.dept))) return;
-      await invoke("task_create", { root: prefs.root, dept: assign.dept.id, agent: assign.agent.id, title: assign.title.trim(), body: assign.body, notesRoot: prefs.notes || null });
-      setAssign(null);
-      onTasks();
+      if (!assign || !assign.title.trim() || sending) return;
+      setSending(true); // bam 2 lan khong tao 2 task
+      try {
+        if (!assign.dept.workspace && !(await pickWorkspace(assign.dept))) return;
+        await invoke("task_create", { root: prefs.root, dept: assign.dept.id, agent: assign.agent.id, title: assign.title.trim(), body: assign.body, notesRoot: prefs.notes || null });
+        setAssign(null);
+        onTasks();
+      } finally {
+        setSending(false);
+      }
     });
 
   return (
@@ -89,7 +95,7 @@ export default function Office({ prefs, tasks, ctx, onOpen, onTasks, onDepts }: 
                     <textarea placeholder="Mo ta, tieu chi nghiem thu..." value={assign.body} onChange={(e) => setAssign({ ...assign, body: e.target.value })} />
                     <div className="set-actions">
                       <button onClick={() => setAssign(null)}>Huy</button>
-                      <button className="primary" disabled={!assign.title.trim()} onClick={submit}>Giao</button>
+                      <button className="primary" disabled={!assign.title.trim() || sending} onClick={submit}>Giao</button>
                     </div>
                   </div>
                 )}

@@ -35,9 +35,10 @@ fn signal_port(app: &AppHandle) -> u16 {
                 let mut buf = [0u8; 512];
                 let n = stream.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]);
-                // "GET /<id> HTTP/1.1"
-                if let Some(id) = req.split_whitespace().nth(1).map(|p| p.trim_start_matches('/')) {
-                    let _ = app.emit(&format!("claude-signal-{id}"), ());
+                // "GET /<id>/<stop|notify> HTTP/1.1" -> payload = loai hook
+                if let Some(p) = req.split_whitespace().nth(1).map(|p| p.trim_start_matches('/')) {
+                    let (id, kind) = p.split_once('/').unwrap_or((p, "stop"));
+                    let _ = app.emit(&format!("claude-signal-{id}"), kind);
                 }
                 let _ = stream.write_all(RESP);
             }
@@ -48,10 +49,13 @@ fn signal_port(app: &AppHandle) -> u16 {
 
 /// Ghi file settings chua hook Stop + Notification tro ve signal server (gop vao `extra`), tra ve duong dan.
 fn hook_settings(app: &AppHandle, id: &str, extra: Option<serde_json::Value>) -> Result<String, String> {
-    let cmd = format!("curl.exe -s -m 2 http://127.0.0.1:{}/{id}", signal_port(app));
-    let hook = serde_json::json!([{ "hooks": [{ "type": "command", "command": cmd }] }]);
+    let port = signal_port(app);
+    let hook = |kind: &str| {
+        let cmd = format!("curl.exe -s -m 2 http://127.0.0.1:{port}/{id}/{kind}");
+        serde_json::json!([{ "hooks": [{ "type": "command", "command": cmd }] }])
+    };
     let mut settings = extra.filter(|v| v.is_object()).unwrap_or_else(|| serde_json::json!({}));
-    settings["hooks"] = serde_json::json!({ "Stop": hook, "Notification": hook });
+    settings["hooks"] = serde_json::json!({ "Stop": hook("stop"), "Notification": hook("notify") });
     let path = std::env::temp_dir().join(format!("claudedeck-hooks-{id}.json"));
     std::fs::write(&path, settings.to_string()).map_err(err)?;
     Ok(path.to_string_lossy().into_owned())
