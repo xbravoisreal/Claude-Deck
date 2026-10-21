@@ -5,8 +5,9 @@ import { load } from "@tauri-apps/plugin-store";
 import Pane from "./Pane";
 import UsageFooter from "./UsageFooter";
 import Settings, { OfficePrefs } from "./Settings";
+import Office, { AgentLaunch } from "./Office";
 
-type Ws = { id: string; cwd: string };
+type Ws = { id: string; cwd: string; agent?: AgentLaunch };
 type Chat = { n: number; args?: string };
 type Entry = { id: string; title: string; modified: number };
 type Prefs = { model: string; auto: boolean };
@@ -19,7 +20,10 @@ function Workspace({ ws, on, active, onFocus, onIdle, onRatio, prefs, onPrefs }:
   const [chat, setChat] = useState<Chat>({ n: 0 });
   const [model, setModel] = useState(prefs.model);
   const [auto, setAuto] = useState(prefs.auto);
-  const flags = `${model === "default" ? "" : `--model ${model}`}${auto ? " --dangerously-skip-permissions" : ""} ${chat.args ?? ""}`;
+  // Tab Agent: chi dung tham so cua Agent (model theo frontmatter, khong bao gio skip permissions).
+  const flags = ws.agent
+    ? `${ws.agent.args} ${chat.args ?? ""}`
+    : `${model === "default" ? "" : `--model ${model}`}${auto ? " --dangerously-skip-permissions" : ""} ${chat.args ?? ""}`;
   const [hist, setHist] = useState<Entry[] | null>(null);
   const chatId = `${ws.id}-chat-${chat.n}`;
 
@@ -50,7 +54,8 @@ function Workspace({ ws, on, active, onFocus, onIdle, onRatio, prefs, onPrefs }:
   return (
     <div className={`ws${on ? " on" : ""}${active ? " active" : ""}`} onMouseDown={onFocus}>
       <div className="head">
-        <span className="head-title" title={ws.cwd} onDoubleClick={() => invoke("open_in_editor", { path: ws.cwd })}>{ws.cwd}</span>
+        <span className="head-title" title={ws.cwd} onDoubleClick={() => invoke("open_in_editor", { path: ws.cwd })}>{ws.agent ? `${ws.agent.label} · ${ws.cwd}` : ws.cwd}</span>
+        {!ws.agent && <>
         <select
           className="model"
           value={model}
@@ -65,11 +70,12 @@ function Workspace({ ws, on, active, onFocus, onIdle, onRatio, prefs, onPrefs }:
         <label className="auto" title="Tu dong duyet moi lenh (--dangerously-skip-permissions)">
           <input type="checkbox" checked={auto} onChange={toggleAuto} /> auto
         </label>
+        </>}
         <button className="icon" title="Chat moi" onClick={() => restart()}>＋</button>
         <button className="icon" title="Lich su" onClick={toggleHistory}>⟲</button>
       </div>
       <div className="chat">
-        <Pane key={chatId} id={chatId} cwd={ws.cwd} kind="chat" visible={on} args={flags} onIdle={onIdle} />
+        <Pane key={chatId} id={chatId} cwd={ws.cwd} kind="chat" visible={on} args={flags} settings={ws.agent?.settings} onIdle={onIdle} />
       </div>
       <div className="splitter" onPointerDown={drag} />
       <div className="shell">
@@ -105,11 +111,13 @@ export default function App() {
   const [alerts, setAlerts] = useState<Set<string>>(new Set());
   const [office, setOffice] = useState<OfficePrefs>({ root: "", notes: "" });
   const [settings, setSettings] = useState(false);
+  const [view, setView] = useState<"office" | "terminal">("office");
   const activeRef = useRef(active);
   activeRef.current = active;
 
   const activate = (id: string) => {
     setActive(id);
+    setView("terminal");
     setAlerts((a) => (a.has(id) ? new Set([...a].filter((x) => x !== id)) : a));
   };
   const alert = (id: string) => {
@@ -132,7 +140,7 @@ export default function App() {
 
   useEffect(() => {
     if (!ready) return;
-    load("state.json").then((s) => (s.set("folders", tabs.map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes)));
+    load("state.json").then((s) => (s.set("folders", tabs.filter((t) => !t.agent).map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes)));
   }, [tabs, split, ratio, prefs, office, ready]);
 
   const openFolder = async () => {
@@ -141,6 +149,14 @@ export default function App() {
     const ws = { id: uid(), cwd };
     setTabs((t) => [...t, ws]);
     setActive(ws.id);
+    setView("terminal");
+  };
+
+  const openAgent = (cwd: string, agent: AgentLaunch) => {
+    const ws = { id: uid(), cwd, agent };
+    setTabs((t) => [...t, ws]);
+    setActive(ws.id);
+    setView("terminal");
   };
 
   const close = (id: string) => {
@@ -152,9 +168,13 @@ export default function App() {
   return (
     <div className="app">
       <div className={`tabs${split ? " split" : ""}`}>
+        <div className="views">
+          <button className={view === "office" ? "on" : ""} onClick={() => setView("office")}>Office</button>
+          <button className={view === "terminal" ? "on" : ""} onClick={() => setView("terminal")}>Terminal</button>
+        </div>
         {tabs.map((t) => (
           <div key={t.id} className={`tab${t.id === active ? " on" : ""}${alerts.has(t.id) ? " alert" : ""}`} onClick={() => activate(t.id)} title={t.cwd}>
-            {base(t.cwd)}
+            {t.agent?.label ?? base(t.cwd)}
             <button className="x" onClick={(e) => (e.stopPropagation(), close(t.id))}>×</button>
           </div>
         ))}
@@ -165,7 +185,8 @@ export default function App() {
           <button className={settings ? "on" : ""} title="Settings" onClick={() => setSettings(!settings)}>⚙</button>
         </div>
       </div>
-      <div className={`stage${split ? " split" : ""}`} style={{ "--r": ratio } as React.CSSProperties}>
+      {view === "office" && <Office prefs={office} onOpen={openAgent} />}
+      <div className={`stage${split ? " split" : ""}${view === "office" ? " hidden" : ""}`} style={{ "--r": ratio } as React.CSSProperties}>
         {tabs.length === 0 && (
           <div className="empty">
             <button onClick={openFolder}>Mo thu muc de bat dau</button>
@@ -175,7 +196,7 @@ export default function App() {
           <Workspace
             key={t.id}
             ws={t}
-            on={split || t.id === active}
+            on={view === "terminal" && (split || t.id === active)}
             active={split && t.id === active}
             onFocus={() => activate(t.id)}
             onIdle={() => alert(t.id)}

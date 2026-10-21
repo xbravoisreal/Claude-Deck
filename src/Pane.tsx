@@ -10,9 +10,9 @@ import "@xterm/xterm/css/xterm.css";
 // Duong dan tuyet doi (H:\x), tuong doi (./x, a/b). ponytail: khong ho tro path co dau cach hay bi wrap sang dong sau.
 const PATH_RE = /(?:(?<!\w)[A-Za-z]:[\\/]|\.{1,2}[\\/]|(?<![\w:\\/.-])[\w.-]+[\\/])[^\s"'`<>|*?]*/g;
 
-type Props = { id: string; cwd: string; kind: "chat" | "shell"; visible: boolean; args?: string; onIdle?: () => void };
+type Props = { id: string; cwd: string; kind: "chat" | "shell"; visible: boolean; args?: string; settings?: unknown; onIdle?: () => void };
 
-export default function Pane({ id, cwd, kind, visible, args, onIdle }: Props) {
+export default function Pane({ id, cwd, kind, visible, args, settings, onIdle }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const idleRef = useRef(onIdle);
   idleRef.current = onIdle;
@@ -73,7 +73,7 @@ export default function Pane({ id, cwd, kind, visible, args, onIdle }: Props) {
         return;
       }
       fit.fit();
-      await invoke("pty_spawn", { id, cwd, kind, cols: term.cols, rows: term.rows, args });
+      await invoke("pty_spawn", { id, cwd, kind, cols: term.cols, rows: term.rows, args, settings });
     })();
 
     // Paste anh: luu ra file tam roi dan duong dan vao terminal, claude tu nhan anh.
