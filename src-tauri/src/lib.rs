@@ -4,6 +4,7 @@ mod history;
 mod office;
 mod pty;
 mod tasks;
+mod telegram;
 mod theme;
 mod usage;
 
