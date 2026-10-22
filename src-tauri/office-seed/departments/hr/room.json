@@ -1,0 +1,13 @@
+{
+  "cols": 5,
+  "rows": 3,
+  "floor": "floor.carpet",
+  "decor": [
+    { "slot": "decor.window", "x": 1, "y": 0 },
+    { "slot": "decor.shelf", "x": 4, "y": 0 },
+    { "slot": "decor.plant", "x": 4, "y": 2 }
+  ],
+  "seats": {
+    "recruiter": { "x": 2, "y": 1, "character": "character.c5" }
+  }
+}

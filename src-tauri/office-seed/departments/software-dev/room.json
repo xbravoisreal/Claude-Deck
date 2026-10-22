@@ -1,0 +1,20 @@
+{
+  "cols": 9,
+  "rows": 4,
+  "floor": "floor.wood",
+  "decor": [
+    { "slot": "decor.window", "x": 2, "y": 0 },
+    { "slot": "decor.board", "x": 4, "y": 0 },
+    { "slot": "decor.window", "x": 6, "y": 0 },
+    { "slot": "decor.shelf", "x": 8, "y": 0 },
+    { "slot": "decor.plant", "x": 0, "y": 1 },
+    { "slot": "decor.coffee", "x": 8, "y": 2 },
+    { "slot": "decor.lamp", "x": 0, "y": 3 }
+  ],
+  "seats": {
+    "tech-lead": { "x": 2, "y": 1, "character": "character.c1" },
+    "dev": { "x": 5, "y": 1, "character": "character.c2" },
+    "reviewer": { "x": 2, "y": 2, "character": "character.c3" },
+    "qa": { "x": 5, "y": 2, "character": "character.c4" }
+  }
+}
