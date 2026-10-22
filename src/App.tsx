@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { load } from "@tauri-apps/plugin-store";
 import Pane from "./Pane";
@@ -20,7 +21,7 @@ const MODELS = ["default", "opus", "sonnet", "haiku"];
 const base = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-function Workspace({ ws, on, active, onFocus, onIdle, onEnter, onRatio, prefs, onPrefs }: { ws: Ws; on: boolean; active: boolean; onFocus: () => void; onIdle: (stop: boolean) => void; onEnter: () => void; onRatio: (r: number) => void; prefs: Prefs; onPrefs: (p: Partial<Prefs>) => void }) {
+function Workspace({ ws, on, active, onFocus, onIdle, onEnter, onRatio, prefs, onPrefs }: { ws: Ws; on: boolean; active: boolean; onFocus: () => void; onIdle: (stop: boolean, message: string) => void; onEnter: () => void; onRatio: (r: number) => void; prefs: Prefs; onPrefs: (p: Partial<Prefs>) => void }) {
   const [chat, setChat] = useState<Chat>({ n: 0 });
   const [model, setModel] = useState(prefs.model);
   const [auto, setAuto] = useState(prefs.auto);
@@ -159,6 +160,7 @@ export default function App() {
         maxLive: (await s.get<number>("maxLive")) ?? OFFICE_DEFAULTS.maxLive,
         warnK: (await s.get<number>("warnK")) ?? OFFICE_DEFAULTS.warnK,
         theme: (await s.get<string>("theme")) ?? OFFICE_DEFAULTS.theme,
+        tgChat: (await s.get<string>("tgChat")) ?? "",
       });
       setReady(true);
     });
@@ -166,7 +168,7 @@ export default function App() {
 
   useEffect(() => {
     if (!ready) return;
-    load("state.json").then((s) => (s.set("folders", tabs.filter((t) => !t.agent).map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes), s.set("maxLive", office.maxLive), s.set("warnK", office.warnK), s.set("theme", office.theme)));
+    load("state.json").then((s) => (s.set("folders", tabs.filter((t) => !t.agent).map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes), s.set("maxLive", office.maxLive), s.set("warnK", office.warnK), s.set("theme", office.theme), s.set("tgChat", office.tgChat)));
   }, [tabs, split, ratio, prefs, office, ready]);
 
   const root = () => officeRef.current.root;
@@ -216,33 +218,84 @@ export default function App() {
     })();
   }, [ready, office.root]);
 
-  const onIdle = (ws: Ws, stop: boolean) => {
+  // Telegram: moi task moi loai tin chi gui 1 lan cho moi lan vao trang thai (xoa khi task chay lai).
+  const sent = useRef(new Set<string>());
+  const notify = (id: string, kind: string) => {
+    if (sent.current.has(`${id}:${kind}`)) return;
+    sent.current.add(`${id}:${kind}`);
+    invoke("tg_notify", { id, kind });
+  };
+  const unsent = (id: string) => ["review", "waiting", "permission"].forEach((k) => sent.current.delete(`${id}:${k}`));
+
+  const onIdle = (ws: Ws, stop: boolean, message: string) => {
     alert(ws.id);
     if (!ws.task) return;
-    const was = tasksRef.current.find((t) => t.id === ws.task)?.status;
-    invoke<Task>("task_idle", { root: root(), id: ws.task, stop }).then((t) => {
+    const id = ws.task;
+    const was = tasksRef.current.find((t) => t.id === id)?.status;
+    invoke<Task>("task_idle", { root: root(), id, stop }).then(async (t) => {
       // Vua chuyen sang Cho sip: dong PTY giai phong cho (mo lai bang --resume). Tab mo lai tu ☰ thi giu.
-      if (t.status === "review" && was !== "review") closeTaskTab(t.id);
+      if (t.status === "review" && was !== "review") {
+        closeTaskTab(id);
+        notify(id, "review");
+      } else if (t.status === "waiting" && /permission/i.test(message)) {
+        // Xin quyen: bao ngay, co nut Cho phep / Tu choi.
+        await invoke("task_stop", { root: root(), id, reason: `xin quyen: ${message}` }).catch(fail);
+        notify(id, "permission");
+      } else if (t.status === "waiting") {
+        // Hoi sep: chi bao neu 45s sau van con cho.
+        setTimeout(() => tasksRef.current.find((x) => x.id === id)?.status === "waiting" && notify(id, "waiting"), 45000);
+      }
       return startNext();
     }, fail);
   };
   const onEnter = (ws: Ws) => {
     const t = tasksRef.current.find((x) => x.id === ws.task);
-    if (t?.status === "waiting") invoke("task_busy", { root: root(), id: t.id }).then(refresh, fail);
+    if (t?.status === "waiting") {
+      unsent(t.id);
+      invoke("task_busy", { root: root(), id: t.id }).then(refresh, fail);
+    }
   };
 
+  // Xu ly tren app -> sua tin Telegram cu (bo nut) de dien thoai khong bam lai.
   const approve = (t: Task) => {
     closeTaskTab(t.id);
-    invoke("task_approve", { root: root(), id: t.id }).then(refresh, fail);
+    invoke("task_approve", { root: root(), id: t.id }).then(() => (invoke("tg_resolved", { id: t.id, text: "✅ Đã duyệt" }), refresh()), fail);
   };
   const rework = (t: Task, note: string) => {
     closeTaskTab(t.id);
-    invoke("task_rework", { root: root(), id: t.id, note }).then(startNext, fail);
+    unsent(t.id);
+    invoke("task_rework", { root: root(), id: t.id, note }).then(() => (invoke("tg_resolved", { id: t.id, text: "↩ Làm lại" }), startNext()), fail);
   };
   const cancel = (t: Task) => {
     closeTaskTab(t.id);
-    invoke("task_cancel", { root: root(), id: t.id }).then(startNext, fail);
+    invoke("task_cancel", { root: root(), id: t.id }).then(() => (invoke("tg_resolved", { id: t.id, text: "Đã hủy" }), startNext()), fail);
   };
+
+  // Bot Telegram: cau hinh lai khi doi chat id / thu muc office. Token doc tu Credential Manager ben Rust.
+  useEffect(() => {
+    if (ready) invoke("tg_config", { chatId: office.tgChat, root: office.root });
+  }, [ready, office.tgChat, office.root]);
+
+  // Su kien tu bot: duyet/lam lai tren dien thoai, cho phep/tu choi lenh.
+  useEffect(() => {
+    const offs = [
+      listen("office-tasks-changed", async () => {
+        const ts = await invoke<Task[]>("task_list", { root: root() }).catch(() => [] as Task[]);
+        // Task vua duoc duyet/lam lai tu dien thoai ma con tab mo lai -> dong tab (lam lai se mo phien moi).
+        ts.filter((t) => t.status === "done" || t.status === "backlog").forEach((t) => (closeTaskTab(t.id), unsent(t.id)));
+        startNext();
+      }),
+      listen<{ task: string; allow: boolean }>("office-permission", (e) => {
+        const ws = tabsRef.current.find((w) => w.task === e.payload.task);
+        if (!ws) return;
+        // Hop thoai xin quyen cua Claude Code: "1" = Yes, Esc = No.
+        invoke("pty_write", { id: `${ws.id}-chat-0`, data: e.payload.allow ? "1" : "\x1b" });
+        unsent(e.payload.task);
+        invoke("task_busy", { root: root(), id: e.payload.task }).then(refresh, fail);
+      }),
+    ];
+    return () => offs.forEach((p) => p.then((off) => off()));
+  }, []);
   const openTask = async (t: Task) => {
     const tab = tabsRef.current.find((x) => x.task === t.id);
     if (tab) return activate(tab.id), setDrawer(false);
@@ -263,9 +316,12 @@ export default function App() {
         setCtx((c) => ({ ...c, [ws.task!]: st.context }));
         setTools((m) => ({ ...m, [ws.task!]: st.tool }));
         const t = tasksRef.current.find((x) => x.id === ws.task);
+        if (st.context >= 250_000) notify(ws.task!, "context");
         if (t?.status === "running" && st.cache_read > st.max_tokens) {
           invoke("pty_write", { id: `${ws.id}-chat-0`, data: "\x03" });
           await invoke("task_stop", { root: root(), id: t.id, reason: "vuot tran" }).catch(fail);
+          sent.current.delete(`${t.id}:cap`);
+          notify(t.id, "cap");
           refresh();
         }
       }
@@ -344,7 +400,7 @@ export default function App() {
             on={view === "terminal" && (split || t.id === active)}
             active={split && t.id === active}
             onFocus={() => activate(t.id)}
-            onIdle={(stop) => onIdle(t, stop)}
+            onIdle={(stop, message) => onIdle(t, stop, message)}
             onEnter={() => onEnter(t)}
             onRatio={setRatio}
             prefs={prefs}

@@ -10,7 +10,7 @@ import "@xterm/xterm/css/xterm.css";
 // Duong dan tuyet doi (H:\x), tuong doi (./x, a/b). ponytail: khong ho tro path co dau cach hay bi wrap sang dong sau.
 const PATH_RE = /(?:(?<!\w)[A-Za-z]:[\\/]|\.{1,2}[\\/]|(?<![\w:\\/.-])[\w.-]+[\\/])[^\s"'`<>|*?]*/g;
 
-type Props = { id: string; cwd: string; kind: "chat" | "shell"; visible: boolean; args?: string; settings?: unknown; onIdle?: (stop: boolean) => void; onEnter?: () => void };
+type Props = { id: string; cwd: string; kind: "chat" | "shell"; visible: boolean; args?: string; settings?: unknown; onIdle?: (stop: boolean, message: string) => void; onEnter?: () => void };
 
 export default function Pane({ id, cwd, kind, visible, args, settings, onIdle, onEnter }: Props) {
   const host = useRef<HTMLDivElement>(null);
@@ -68,7 +68,8 @@ export default function Pane({ id, cwd, kind, visible, args, settings, onIdle, o
     (async () => {
       unlisten = await listen<string>(`pty-data-${id}`, (e) => term.write(e.payload));
       // Hook Stop/Notification cua claude (xem pty.rs) -> claude xong viec hoac can user.
-      unsignal = await listen<string>(`claude-signal-${id}`, (e) => idleRef.current?.(e.payload === "stop"));
+      // payload: { kind: "stop" | "notify", message } (message cua hook Notification, vd xin quyen).
+      unsignal = await listen<{ kind: string; message: string }>(`claude-signal-${id}`, (e) => idleRef.current?.(e.payload.kind === "stop", e.payload.message));
       if (disposed) {
         unlisten();
         unsignal();
