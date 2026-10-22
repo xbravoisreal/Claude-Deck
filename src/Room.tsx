@@ -6,8 +6,9 @@ type RoomCfg = { cols?: number; rows?: number; floor?: string; decor?: { slot: s
 
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 
-/** Cho ngoi: theo room.json; agent thieu cho -> o trong dau tien (hang 1 tro xuong) khong dung decor va khong sat ban khac
- *  (nhan/bong thoai rong hon 1 o). Het cho thi noi them hang. Tra ve ca kich thuoc phong da noi rong cho vua moi ban. */
+/** Cho ngoi: theo room.json; agent thieu cho -> xep zic zac (cot cach 2 o, hang so le lech xuong 1) de nhan duoi ban
+ *  khong de len bong thoai/ban ben canh; bo o dung decor hoac sat ban khac. Het cho thi noi them hang.
+ *  Tra ve ca kich thuoc phong da noi rong cho vua moi ban. */
 export function seatsFor(room: RoomCfg, agents: string[], cols: number, rows: number) {
   const seats: Record<string, Seat> = {};
   const decor = new Set((room.decor ?? []).map((d) => `${d.x},${d.y}`));
@@ -21,14 +22,16 @@ export function seatsFor(room: RoomCfg, agents: string[], cols: number, rows: nu
   }
   const free = (x: number, y: number) => !decor.has(`${x},${y}`) && ![x - 1, x, x + 1].some((k) => used.has(`${k},${y}`));
   for (const a of agents.filter((a) => !seats[a])) {
-    for (let y = 1; !seats[a]; y++) {
-      for (let x = 1; x < cols - 1 && !seats[a]; x++) {
+    // Dai b gom 2 hang (1+3b, 2+3b); cot 1,3,5... luan phien hang tren/duoi; giua cac dai chua 1 hang trong cho nhan.
+    for (let b = 0; !seats[a]; b++) {
+      for (let k = 0; 1 + 2 * k < cols - 1 && !seats[a]; k++) {
+        const x = 1 + 2 * k, y = 1 + 3 * b + (k % 2);
         if (free(x, y)) {
           seats[a] = { x, y };
           used.add(`${x},${y}`);
         }
       }
-      if (y > rows + agents.length) seats[a] = { x: 1, y }; // phong 1-2 cot: xep doc
+      if (b > agents.length) seats[a] = { x: 1, y: 1 + 3 * b }; // phong qua hep: xep doc
     }
   }
   const all = Object.values(seats);

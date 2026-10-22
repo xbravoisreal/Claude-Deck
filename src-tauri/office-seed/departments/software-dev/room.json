@@ -12,9 +12,9 @@
     { "slot": "decor.lamp", "x": 0, "y": 3 }
   ],
   "seats": {
-    "tech-lead": { "x": 2, "y": 1, "character": "character.c1" },
-    "dev": { "x": 5, "y": 1, "character": "character.c2" },
-    "reviewer": { "x": 2, "y": 2, "character": "character.c3" },
-    "qa": { "x": 5, "y": 2, "character": "character.c4" }
+    "tech-lead": { "x": 1, "y": 1, "character": "character.c1" },
+    "dev": { "x": 3, "y": 2, "character": "character.c2" },
+    "reviewer": { "x": 5, "y": 1, "character": "character.c3" },
+    "qa": { "x": 7, "y": 2, "character": "character.c4" }
   }
 }

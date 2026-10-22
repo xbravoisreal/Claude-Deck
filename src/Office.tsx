@@ -92,6 +92,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
         <button className="room room-new" title="Them thu muc trong departments/ (xem themes/README.md)" onClick={() => reveal(`${prefs.root}\\departments`)}>
           + Mo phong
         </button>
+        {pd && pa && <div className="drawer-backdrop" onClick={() => setPanel(null)} />}
         {pd && pa && (
           <AgentPanel
             key={`${pd.id}/${pa.id}`}
