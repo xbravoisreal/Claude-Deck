@@ -34,6 +34,9 @@ pub struct Task {
     /// Luc duyet hoac huy (millis), 0 = chua xong. Dung cho tab Lich su.
     #[serde(default)]
     pub finished: i64,
+    /// message_id tin Telegram con nut bam cua task (0 = khong co).
+    #[serde(default)]
+    pub tg_msg: i64,
     #[serde(default, skip_deserializing)]
     pub summary: String,
 }
@@ -138,6 +141,7 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
         started: false,
         cap_base: 0,
         finished: 0,
+        tg_msg: 0,
         summary: String::new(),
     })
 }
@@ -228,14 +232,14 @@ fn new_session_id() -> String {
 }
 
 /// 2 dong khong rong dau tien cua result.md (bo frontmatter).
-fn summary(dir: &str) -> String {
+pub(crate) fn summary(dir: &str) -> String {
     let Ok(s) = std::fs::read_to_string(Path::new(dir).join("result.md")) else { return String::new() };
     let body = s.strip_prefix("---").and_then(|r| r.split_once("\n---")).map_or(s.as_str(), |(_, b)| b);
     body.lines().map(str::trim).filter(|l| !l.is_empty()).take(2).collect::<Vec<_>>().join("\n")
 }
 
 /// Sua mot task theo id, tra ve ban sau khi sua.
-fn update(root: &str, id: &str, f: impl FnOnce(&mut Task) -> Result<(), String>) -> Result<Task, String> {
+pub(crate) fn update(root: &str, id: &str, f: impl FnOnce(&mut Task) -> Result<(), String>) -> Result<Task, String> {
     update_with(root, id, |t| f(t).map(|_| t.clone()))
 }
 
@@ -482,6 +486,7 @@ mod tests {
             started: false,
             cap_base: 0,
             finished: 0,
+            tg_msg: 0,
             summary: String::new(),
         }
     }

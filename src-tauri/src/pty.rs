@@ -32,13 +32,9 @@ fn signal_port(app: &AppHandle) -> u16 {
         let app = app.clone();
         std::thread::spawn(move || {
             for mut stream in listener.incoming().flatten() {
-                let mut buf = [0u8; 512];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                let req = String::from_utf8_lossy(&buf[..n]);
-                // "GET /<id>/<stop|notify> HTTP/1.1" -> payload = loai hook
-                if let Some(p) = req.split_whitespace().nth(1).map(|p| p.trim_start_matches('/')) {
-                    let (id, kind) = p.split_once('/').unwrap_or((p, "stop"));
-                    let _ = app.emit(&format!("claude-signal-{id}"), kind);
+                // Hook Notification gui kem JSON (message: xin quyen hay chi ranh) qua than request.
+                if let Some((id, kind, message)) = parse_signal(&read_request(&mut stream)) {
+                    let _ = app.emit(&format!("claude-signal-{id}"), serde_json::json!({ "kind": kind, "message": message }));
                 }
                 let _ = stream.write_all(RESP);
             }
@@ -50,8 +46,9 @@ fn signal_port(app: &AppHandle) -> u16 {
 /// Ghi file settings chua hook Stop + Notification tro ve signal server (gop vao `extra`), tra ve duong dan.
 fn hook_settings(app: &AppHandle, id: &str, extra: Option<serde_json::Value>) -> Result<String, String> {
     let port = signal_port(app);
+    // curl doc JSON cua hook tu stdin (--data-binary @-) va gui len server.
     let hook = |kind: &str| {
-        let cmd = format!("curl.exe -s -m 2 http://127.0.0.1:{port}/{id}/{kind}");
+        let cmd = format!("curl.exe -s -m 2 --data-binary @- http://127.0.0.1:{port}/{id}/{kind}");
         serde_json::json!([{ "hooks": [{ "type": "command", "command": cmd }] }])
     };
     let mut settings = extra.filter(|v| v.is_object()).unwrap_or_else(|| serde_json::json!({}));
@@ -150,6 +147,55 @@ pub fn pty_resize(state: State<Sessions>, id: String, cols: u16, rows: u16) -> R
             .map_err(err)?;
     }
     Ok(())
+}
+
+/// "<METHOD> /<id>[/<kind>] HTTP/1.1 ... \r\n\r\n<json hook>" -> (id, kind, message). Khong co kind = stop.
+pub fn parse_signal(req: &str) -> Option<(String, String, String)> {
+    let path = req.lines().next()?.split_whitespace().nth(1)?.trim_start_matches('/');
+    let (id, kind) = path.split_once('/').unwrap_or((path, "stop"));
+    let body = req.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+    let msg = serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| v["message"].as_str().map(String::from)).unwrap_or_default();
+    Some((id.into(), kind.into(), msg))
+}
+
+/// Doc tron mot request (header + than theo Content-Length), toi da 64KB, cho toi da 2s.
+fn read_request(stream: &mut std::net::TcpStream) -> String {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let mut data = Vec::new();
+    let mut buf = [0u8; 4096];
+    while data.len() < 65536 {
+        let n = match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        data.extend_from_slice(&buf[..n]);
+        let s = String::from_utf8_lossy(&data);
+        if let Some((head, body)) = s.split_once("\r\n\r\n") {
+            let len = head
+                .lines()
+                .find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.trim().parse::<usize>().ok()))
+                .unwrap_or(0);
+            if body.len() >= len {
+                break;
+            }
+        }
+    }
+    String::from_utf8_lossy(&data).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signal_reads_body() {
+        let body = r#"{"hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}"#;
+        let req = format!("POST /abc-chat-0/notify HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        assert_eq!(parse_signal(&req), Some(("abc-chat-0".into(), "notify".into(), "Claude needs your permission to use Bash".into())));
+        assert_eq!(parse_signal("GET /abc/stop HTTP/1.1\r\n\r\n"), Some(("abc".into(), "stop".into(), String::new())));
+        assert_eq!(parse_signal("GET /abc HTTP/1.1\r\n\r\n"), Some(("abc".into(), "stop".into(), String::new())));
+        assert_eq!(parse_signal("rac"), None);
+    }
 }
 
 #[tauri::command]

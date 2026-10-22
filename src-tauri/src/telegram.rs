@@ -1,5 +1,11 @@
-use crate::tasks::Task;
+use crate::office::load_office;
+use crate::tasks::{self, Task};
 use serde_json::{json, Value};
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter};
 
 /// Hanh dong sep bam/gui tren Telegram.
 #[derive(Debug, PartialEq)]
@@ -84,6 +90,266 @@ pub fn waiting_message(agent: &str, dept: &str, t: &Task, permission: bool) -> (
     }
     let kb = if permission { buttons(&[("✅ Cho phép", format!("al:{}", t.id)), ("⛔ Từ chối", format!("de:{}", t.id))]) } else { Value::Null };
     (text, kb)
+}
+
+// ---------------- Chay that: Credential Manager, HTTP, vong long-polling ----------------
+
+const SERVICE: &str = "claudedeck-telegram";
+const USER: &str = "bot-token";
+
+fn entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(SERVICE, USER).map_err(|e| e.to_string())
+}
+
+/// Token chi doc trong Rust, khong bao gio tra len frontend.
+fn token() -> Option<String> {
+    entry().ok()?.get_password().ok().filter(|t| !t.is_empty())
+}
+
+#[derive(Clone)]
+struct Cfg {
+    token: String,
+    chat: i64,
+    root: String,
+}
+
+static CFG: Mutex<Option<Cfg>> = Mutex::new(None);
+/// Moi lan cau hinh lai tang GEN; vong polling cu thay GEN doi thi tu dung.
+static GEN: AtomicU64 = AtomicU64::new(0);
+static STATUS: Mutex<String> = Mutex::new(String::new());
+
+fn set_status(s: impl Into<String>) {
+    *STATUS.lock().unwrap_or_else(|e| e.into_inner()) = s.into();
+}
+
+fn cfg() -> Result<Cfg, String> {
+    CFG.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| "chua cau hinh Telegram".into())
+}
+
+fn client() -> &'static reqwest::blocking::Client {
+    static C: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    C.get_or_init(|| reqwest::blocking::Client::builder().timeout(Duration::from_secs(45)).build().expect("http client"))
+}
+
+/// Goi Bot API. Loi khong kem URL (URL co token).
+fn api(token: &str, method: &str, body: Value) -> Result<Value, String> {
+    let e = |e: reqwest::Error| e.without_url().to_string();
+    let r: Value = client().post(format!("https://api.telegram.org/bot{token}/{method}")).json(&body).send().map_err(e)?.json().map_err(e)?;
+    if r["ok"].as_bool() == Some(true) {
+        Ok(r["result"].clone())
+    } else {
+        Err(r["description"].as_str().unwrap_or("loi Telegram").into())
+    }
+}
+
+fn send(c: &Cfg, text: &str, markup: &Value) -> Result<i64, String> {
+    let mut body = json!({ "chat_id": c.chat, "text": text, "parse_mode": "HTML" });
+    if !markup.is_null() {
+        body["reply_markup"] = markup.clone();
+    }
+    Ok(api(&c.token, "sendMessage", body)?["message_id"].as_i64().unwrap_or(0))
+}
+
+/// Sua noi dung tin (khong gui reply_markup = bo nut).
+fn edit(c: &Cfg, msg: i64, text: &str) {
+    if msg != 0 {
+        let _ = api(&c.token, "editMessageText", json!({ "chat_id": c.chat, "message_id": msg, "text": text, "parse_mode": "HTML" }));
+    }
+}
+
+fn answer(c: &Cfg, qid: &Option<String>, text: &str) {
+    if let Some(q) = qid {
+        let _ = api(&c.token, "answerCallbackQuery", json!({ "callback_query_id": q, "text": text }));
+    }
+}
+
+/// (ten Agent, ten phong) de ghi trong tin.
+fn names(root: &str, t: &Task) -> (String, String) {
+    let d = load_office(Path::new(root)).into_iter().find(|d| d.config.id == t.dept);
+    let agent = d.as_ref().and_then(|d| d.agent_defs.iter().find(|a| a.id == t.agent)).map_or(t.agent.clone(), |a| a.name.clone());
+    (agent, d.map_or(t.dept.clone(), |d| d.config.name))
+}
+
+fn find(root: &str, id: &str) -> Option<Task> {
+    tasks::load_tasks(Path::new(root)).ok()?.into_iter().find(|t| t.id == id)
+}
+
+/// Xu ly mot update da qua kiem tra chat id.
+fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
+    let (action, qid) = parse_update(u, c.chat, chat);
+    let cb_msg = u["callback_query"]["message"]["message_id"].as_i64().unwrap_or(0);
+    let changed = || {
+        let _ = app.emit("office-tasks-changed", ());
+    };
+    match action {
+        Action::Approve(id) => match tasks::update(&c.root, &id, tasks::approve) {
+            Ok(t) => {
+                answer(c, &qid, "Đã duyệt");
+                edit(c, cb_msg, &format!("✅ Đã duyệt · <b>{}</b>", escape(&t.title)));
+                let _ = tasks::update(&c.root, &id, |t| Ok(t.tg_msg = 0));
+                changed();
+            }
+            Err(_) => answer(c, &qid, "Đã xử lý rồi"),
+        },
+        Action::Rework(id) => match find(&c.root, &id).filter(|t| t.status == "review") {
+            Some(t) => {
+                answer(c, &qid, "");
+                let _ = send(c, &format!("↩ Nhận xét để làm lại <b>{}</b>? (trả lời tin này)", escape(&t.title)), &json!({ "force_reply": true }));
+            }
+            None => {
+                chat.pending_rework = None;
+                answer(c, &qid, "Đã xử lý rồi");
+            }
+        },
+        Action::ReworkNote(id, note) => match tasks::update(&c.root, &id, |t| tasks::rework(t, &note)) {
+            Ok(t) => {
+                edit(c, t.tg_msg, &format!("↩ Làm lại · <b>{}</b>", escape(&t.title)));
+                let _ = tasks::update(&c.root, &id, |t| Ok(t.tg_msg = 0));
+                let _ = send(c, &format!("↩ Đã gửi làm lại: <b>{}</b>", escape(&t.title)), &Value::Null);
+                changed();
+            }
+            Err(_) => {
+                let _ = send(c, "Task đã xử lý rồi.", &Value::Null);
+            }
+        },
+        Action::Allow(id) | Action::Deny(id) if find(&c.root, &id).is_some_and(|t| t.status == "waiting") => {
+            let allow = u["callback_query"]["data"].as_str().is_some_and(|d| d.starts_with("al:"));
+            let _ = app.emit("office-permission", json!({ "task": id, "allow": allow }));
+            answer(c, &qid, if allow { "Đã cho phép" } else { "Đã từ chối" });
+            edit(c, cb_msg, &format!("{} · task {}", if allow { "✅ Đã cho phép" } else { "⛔ Đã từ chối" }, escape(&id)));
+        }
+        Action::Allow(_) | Action::Deny(_) => answer(c, &qid, "Đã xử lý rồi"),
+        Action::Ignore => answer(c, &qid, ""),
+    }
+}
+
+/// Vong long-polling getUpdates. Loi mang/token -> cho 5s, 10s... toi da 60s.
+fn poll(app: AppHandle, c: Cfg, gen: u64) {
+    let (mut offset, mut chat, mut wait) = (0i64, Chat::default(), 5u64);
+    while GEN.load(Ordering::SeqCst) == gen {
+        match api(&c.token, "getUpdates", json!({ "offset": offset, "timeout": 30, "allowed_updates": ["message", "callback_query"] })) {
+            Ok(list) => {
+                set_status("dang ket noi");
+                wait = 5;
+                for u in list.as_array().into_iter().flatten() {
+                    offset = offset.max(u["update_id"].as_i64().unwrap_or(0) + 1);
+                    if GEN.load(Ordering::SeqCst) == gen {
+                        handle(&app, &c, u, &mut chat);
+                    }
+                }
+            }
+            Err(e) => {
+                set_status(format!("loi: {e}"));
+                std::thread::sleep(Duration::from_secs(wait));
+                wait = (wait * 2).min(60);
+            }
+        }
+    }
+}
+
+/// Luu token vao Windows Credential Manager (rong = xoa).
+#[tauri::command]
+pub fn tg_set_token(token: String) -> Result<(), String> {
+    let e = entry()?;
+    if token.trim().is_empty() {
+        match e.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(x) => Err(x.to_string()),
+        }
+    } else {
+        e.set_password(token.trim()).map_err(|x| x.to_string())
+    }
+}
+
+#[tauri::command]
+pub fn tg_has_token() -> bool {
+    token().is_some()
+}
+
+#[tauri::command]
+pub fn tg_status() -> String {
+    STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Cau hinh lai va (khoi) chay vong polling. Thieu token hoac chat id -> tat bot.
+#[tauri::command]
+pub fn tg_config(app: AppHandle, chat_id: String, root: String) {
+    let gen = GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let c = match (token(), chat_id.trim().parse::<i64>()) {
+        (Some(token), Ok(chat)) => Cfg { token, chat, root },
+        (None, _) => return (*CFG.lock().unwrap_or_else(|e| e.into_inner()) = None, set_status("tat (chua co token)")).0,
+        (_, Err(_)) => return (*CFG.lock().unwrap_or_else(|e| e.into_inner()) = None, set_status("tat (chua co chat id)")).0,
+    };
+    *CFG.lock().unwrap_or_else(|e| e.into_inner()) = Some(c.clone());
+    set_status("dang ket noi...");
+    std::thread::spawn(move || poll(app, c, gen));
+}
+
+#[tauri::command]
+pub async fn tg_test(chat_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let c = Cfg { token: token().ok_or("chua luu token")?, chat: chat_id.trim().parse().map_err(|_| "chat id phai la so")?, root: String::new() };
+        send(&c, "✅ ClaudeDeck đã kết nối", &Value::Null).map(|_| ())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Cac chat da nhan cho bot gan day: (id, ten) — de sep chon chat id.
+#[tauri::command]
+pub async fn tg_detect_chat() -> Result<Vec<(i64, String)>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let list = api(&token().ok_or("chua luu token")?, "getUpdates", json!({ "timeout": 0 }))?;
+        let mut out: Vec<(i64, String)> = vec![];
+        for u in list.as_array().into_iter().flatten() {
+            let ch = &u["message"]["chat"];
+            if let Some(id) = ch["id"].as_i64().filter(|id| !out.iter().any(|(x, _)| x == id)) {
+                let name = ch["title"].as_str().or(ch["username"].as_str()).or(ch["first_name"].as_str()).unwrap_or("?");
+                out.push((id, name.into()));
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Gui thong bao cua task. kind: review | waiting | permission | context | cap. Chay nen, loi ghi vao status.
+#[tauri::command]
+pub fn tg_notify(id: String, kind: String) {
+    std::thread::spawn(move || {
+        let Ok(c) = cfg() else { return };
+        let Some(mut t) = find(&c.root, &id) else { return };
+        t.summary = tasks::summary(&t.dir);
+        let (agent, dept) = names(&c.root, &t);
+        let head = |icon: &str, what: &str| format!("{icon} <b>{what}</b> · <b>{}</b> · {}\nTask: {}", escape(&agent), escape(&dept), escape(&clip(&t.title, 120)));
+        let (text, kb) = match kind.as_str() {
+            "review" => review_message(&agent, &dept, &t),
+            "waiting" => waiting_message(&agent, &dept, &t, false),
+            "permission" => waiting_message(&agent, &dept, &t, true),
+            "context" => (head("⚠️", "Phiên dài") + "\nNgữ cảnh vượt 250K token, nên tách task.", Value::Null),
+            "cap" => (head("⛔", "Vượt trần token") + "\nĐã dừng phiên, mở ☰ trên ClaudeDeck để xem.", Value::Null),
+            _ => return,
+        };
+        match send(&c, &text, &kb) {
+            Ok(msg) if !kb.is_null() => {
+                let _ = tasks::update(&c.root, &id, |t| Ok(t.tg_msg = msg));
+            }
+            Ok(_) => {}
+            Err(e) => set_status(format!("loi gui tin: {e}")),
+        }
+    });
+}
+
+/// Task da xu ly tren app -> sua tin con nut thanh `text`, bo nut.
+#[tauri::command]
+pub fn tg_resolved(id: String, text: String) {
+    std::thread::spawn(move || {
+        let Ok(c) = cfg() else { return };
+        let Some(t) = find(&c.root, &id).filter(|t| t.tg_msg != 0) else { return };
+        edit(&c, t.tg_msg, &format!("{} · <b>{}</b>", escape(&text), escape(&t.title)));
+        let _ = tasks::update(&c.root, &id, |t| Ok(t.tg_msg = 0));
+    });
 }
 
 #[cfg(test)]
