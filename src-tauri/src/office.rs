@@ -37,6 +37,8 @@ pub struct Department {
     pub config: DeptConfig,
     pub agent_defs: Vec<AgentDef>,
     pub errors: Vec<String>,
+    /// room.json (bo tri phong, xem themes/README.md); thieu/hong -> {}.
+    pub room: serde_json::Value,
 }
 
 /// File agent dang subagent cua Claude Code: frontmatter `key: value` + than la system prompt.
@@ -76,10 +78,17 @@ pub fn load_office(root: &Path) -> Vec<Department> {
                 Ok(c) => c,
                 Err(e) => {
                     let config = DeptConfig { id: id.clone(), name: id, ..Default::default() };
-                    return Some(Department { config, agent_defs: vec![], errors: vec![format!("department.json: {e}")] });
+                    return Some(Department { config, agent_defs: vec![], errors: vec![format!("department.json: {e}")], room: serde_json::json!({}) });
                 }
             };
             let mut errors = vec![];
+            let room = match std::fs::read_to_string(dir.join("room.json")) {
+                Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+                    errors.push(format!("room.json: {e}"));
+                    serde_json::json!({})
+                }),
+                Err(_) => serde_json::json!({}),
+            };
             let agent_defs = config
                 .agents
                 .iter()
@@ -90,7 +99,7 @@ pub fn load_office(root: &Path) -> Vec<Department> {
                     r.map_err(|e| errors.push(e)).ok()
                 })
                 .collect();
-            Some(Department { config, agent_defs, errors })
+            Some(Department { config, agent_defs, errors, room })
         })
         .collect();
     out.sort_by(|a, b| a.config.id.cmp(&b.config.id));
@@ -130,11 +139,16 @@ const SEED: &[(&str, &str)] = &[
     ("departments/software-dev/agents/qa.md", include_str!("../office-seed/departments/software-dev/agents/qa.md")),
     ("departments/hr/department.json", include_str!("../office-seed/departments/hr/department.json")),
     ("departments/hr/agents/recruiter.md", include_str!("../office-seed/departments/hr/agents/recruiter.md")),
+    ("departments/software-dev/room.json", include_str!("../office-seed/departments/software-dev/room.json")),
+    ("departments/hr/room.json", include_str!("../office-seed/departments/hr/room.json")),
+    ("themes/README.md", include_str!("../office-seed/themes/README.md")),
 ];
 
 /// Ghi du lieu mac dinh, chi nhung file chua ton tai (khong de len ban nguoi dung da sua).
+/// Theme mac dinh cung duoc ghi ra `themes/default` lam mau cho chu app copy.
 pub fn seed_office(root: &Path) -> std::io::Result<()> {
-    for (rel, content) in SEED {
+    let theme = crate::theme::DEFAULT_FILES.iter().map(|(n, c)| (format!("themes/default/{n}"), *c));
+    for (rel, content) in SEED.iter().map(|(r, c)| (r.to_string(), *c)).chain(theme) {
         let p = root.join(rel);
         if !p.exists() {
             std::fs::create_dir_all(p.parent().unwrap())?;
@@ -335,6 +349,33 @@ mod tests {
         assert_eq!(o.iter().map(|d| d.config.id.as_str()).collect::<Vec<_>>(), vec!["hr", "software-dev"]);
         assert_eq!(o[1].agent_defs.len(), 4);
         assert!(o.iter().all(|d| d.errors.is_empty()));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn seed_writes_rooms_and_theme() {
+        let root = tmp("seed-room");
+        seed_office(&root).unwrap();
+        let o = load_office(&root);
+        assert_eq!(o[1].room["seats"]["dev"]["x"], 5);
+        assert_eq!(o[0].room["floor"], "floor.carpet");
+        assert!(root.join("themes/default/theme.json").exists());
+        assert!(root.join("themes/default/desk.svg").exists());
+        assert!(root.join("themes/README.md").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn room_missing_is_default() {
+        let root = tmp("room");
+        dept(&root, &["ok"], &[("ok", OK)]);
+        let d = &load_office(&root)[0];
+        assert_eq!(d.room, serde_json::json!({}));
+        assert!(d.errors.is_empty());
+        fs::write(root.join("departments/t/room.json"), "{ hong").unwrap();
+        let d = &load_office(&root)[0];
+        assert_eq!(d.room, serde_json::json!({}));
+        assert!(d.errors[0].contains("room.json"));
         fs::remove_dir_all(&root).unwrap();
     }
 

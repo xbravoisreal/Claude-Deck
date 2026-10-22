@@ -344,6 +344,8 @@ pub struct Stats {
     pub context: u64,
     pub cache_read: u64,
     pub max_tokens: u64,
+    /// Ten tool Agent dang dung ("" neu dang viet/nghi).
+    pub tool: String,
 }
 
 /// context = do dai ngu canh cua luot cuoi; cache_read cong don, moi message.id tinh mot lan (stream ghi nhieu dong).
@@ -357,6 +359,14 @@ pub fn session_stats(jsonl: &Path) -> Stats {
         let u = &v["message"]["usage"];
         if v["type"] != "assistant" || !u.is_object() {
             continue;
+        }
+        // Tool dang chay = tool_use gan nhat, cho toi khi Agent viet text moi.
+        for c in v["message"]["content"].as_array().into_iter().flatten() {
+            match c["type"].as_str() {
+                Some("tool_use") => st.tool = c["name"].as_str().unwrap_or_default().into(),
+                Some("text") => st.tool.clear(),
+                _ => {}
+            }
         }
         let g = |k: &str| u[k].as_u64().unwrap_or(0);
         st.context = g("input_tokens") + g("cache_read_input_tokens") + g("cache_creation_input_tokens");
@@ -703,6 +713,21 @@ mod tests {
     }
 
     #[test]
+    fn stats_reports_last_tool() {
+        let root = tmp("tool");
+        let p = root.join("s.jsonl");
+        let a = |c: serde_json::Value| serde_json::json!({"type":"assistant","message":{"id":"m","content":[c],"usage":{}}}).to_string();
+        let edit = a(serde_json::json!({"type":"tool_use","name":"Edit"}));
+        let text = a(serde_json::json!({"type":"text","text":"xong"}));
+        let result = serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result"}]}}).to_string();
+        fs::write(&p, [text.clone(), edit, result].join("\n")).unwrap();
+        assert_eq!(session_stats(&p).tool, "Edit"); // tool_result chua co text moi -> van dang o tool
+        fs::write(&p, [fs::read_to_string(&p).unwrap(), text].join("\n")).unwrap();
+        assert_eq!(session_stats(&p).tool, "");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn stats_dedupes_message_ids() {
         let root = tmp("stats");
         let p = root.join("s.jsonl");
@@ -711,7 +736,7 @@ mod tests {
         };
         let user = serde_json::json!({"type":"user","message":{"content":"hi"}}).to_string();
         fs::write(&p, [line("m1", 1, 100, 0), line("m1", 1, 100, 0), user, line("m2", 5, 300, 10), "hong".into()].join("\n")).unwrap();
-        assert_eq!(session_stats(&p), Stats { context: 315, cache_read: 400, max_tokens: 0 });
+        assert_eq!(session_stats(&p), Stats { context: 315, cache_read: 400, max_tokens: 0, tool: String::new() });
         assert_eq!(session_stats(&root.join("none.jsonl")), Stats::default());
         let _ = fs::remove_dir_all(&root);
     }

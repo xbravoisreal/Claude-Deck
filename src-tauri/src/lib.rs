@@ -4,6 +4,7 @@ mod history;
 mod office;
 mod pty;
 mod tasks;
+mod theme;
 mod usage;
 
 pub fn run() {
@@ -35,6 +36,8 @@ pub fn run() {
             tasks::task_start_next,
             tasks::task_resume,
             tasks::task_stats,
+            theme::theme_load,
+            theme::theme_list,
             open_in_editor,
             accounts::list_accounts,
             accounts::switch_account,
