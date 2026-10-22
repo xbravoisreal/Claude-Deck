@@ -184,6 +184,7 @@ const theme = {
   colors: {
     bg: "#1f2128", room: "#2a2d36", border: "#3a3f4a", text: "#e3e3e3", muted: "#8a8f9c", accent: "#d97757",
     review: "#f5a524", waiting: "#e5b567", running: "#7fb77e", idle: "#6b7080", warn: "#e08a3c", "bubble-text": "#1a1a1a",
+    error: "#e5484d", shadow: "#000000", input: "#22242b",
   },
   slots,
 };

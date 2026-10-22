@@ -6,30 +6,37 @@ type RoomCfg = { cols?: number; rows?: number; floor?: string; decor?: { slot: s
 
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 
-/** Cho ngoi: theo room.json, agent thieu cho thi xep vao o trong ke tiep (hang 1 tro xuong, cach 1 o). */
+/** Cho ngoi: theo room.json; agent thieu cho -> o trong dau tien (hang 1 tro xuong) khong dung decor va khong sat ban khac
+ *  (nhan/bong thoai rong hon 1 o). Het cho thi noi them hang. Tra ve ca kich thuoc phong da noi rong cho vua moi ban. */
 export function seatsFor(room: RoomCfg, agents: string[], cols: number, rows: number) {
-  const out: Record<string, Seat> = {};
-  const taken = new Set((room.decor ?? []).map((d) => `${d.x},${d.y}`));
+  const seats: Record<string, Seat> = {};
+  const decor = new Set((room.decor ?? []).map((d) => `${d.x},${d.y}`));
+  const used = new Set<string>();
   for (const a of agents) {
     const s = room.seats?.[a];
     if (s) {
-      out[a] = s;
-      taken.add(`${s.x},${s.y}`);
+      seats[a] = s;
+      used.add(`${s.x},${s.y}`);
     }
   }
-  let i = 0;
-  for (const a of agents.filter((a) => !out[a])) {
-    for (; i < cols * rows; i++) {
-      const x = 1 + ((i * 2) % Math.max(1, cols - 1)), y = 1 + Math.floor((i * 2) / Math.max(1, cols - 1));
-      if (y < rows && !taken.has(`${x},${y}`)) {
-        out[a] = { x, y };
-        taken.add(`${x},${y}`);
-        break;
+  const free = (x: number, y: number) => !decor.has(`${x},${y}`) && ![x - 1, x, x + 1].some((k) => used.has(`${k},${y}`));
+  for (const a of agents.filter((a) => !seats[a])) {
+    for (let y = 1; !seats[a]; y++) {
+      for (let x = 1; x < cols - 1 && !seats[a]; x++) {
+        if (free(x, y)) {
+          seats[a] = { x, y };
+          used.add(`${x},${y}`);
+        }
       }
+      if (y > rows + agents.length) seats[a] = { x: 1, y }; // phong 1-2 cot: xep doc
     }
-    out[a] ??= { x: 0, y: rows - 1 }; // phong qua chat: ngoi tam goc duoi
   }
-  return out;
+  const all = Object.values(seats);
+  return {
+    seats,
+    cols: Math.max(cols, ...all.map((s) => s.x + 1)),
+    rows: Math.max(rows, ...all.map((s) => s.y + 1)),
+  };
 }
 
 /** Trang thai nhan vat theo task hien tai. */
@@ -47,11 +54,15 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
   const theme = useTheme()!;
   const cell = cellOf(theme);
   const room = (dept.room ?? {}) as RoomCfg;
-  const cols = room.cols ?? Math.max(6, dept.agent_defs.length * 2 + 2);
-  const rows = room.rows ?? 3;
+  const { seats, cols, rows } = seatsFor(room, dept.agent_defs.map((a) => a.id), room.cols ?? Math.max(6, dept.agent_defs.length * 2 + 2), room.rows ?? 3);
   const floor = room.floor && theme.slots[room.floor] ? room.floor : Object.keys(theme.slots).find((k) => k.startsWith("floor.")) ?? "";
-  const seats = seatsFor(room, dept.agent_defs.map((a) => a.id), cols, rows);
   const chars = characters(theme);
+  /** Slot nhan vat cho tu the; thieu anh tu the thi lui ve typing, roi ve nhan vat mac dinh theo ten. */
+  const charSlot = (want: string | undefined, agent: string, p: string) => {
+    const fallback = chars[hash(agent) % Math.max(1, chars.length)];
+    for (const id of [want, fallback]) for (const s of [p, "typing"]) if (id && theme.slots[`character.${id}.${s}`]) return `character.${id}.${s}`;
+    return "";
+  };
   const mine = tasks.filter((t) => t.dept === dept.id);
   const current = (a: string) =>
     mine.find((t) => t.agent === a && (t.status === "running" || t.status === "waiting")) ?? mine.find((t) => t.agent === a && t.status === "review");
@@ -84,7 +95,6 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
           {dept.agent_defs.map((a) => {
             const s = seats[a.id];
             const t = current(a.id);
-            const ch = s.character?.replace(/^character\./, "") ?? chars[hash(a.id) % Math.max(1, chars.length)];
             const warn = t && (ctx[t.id] ?? 0) >= warnK * 1000;
             return (
               <button
@@ -94,7 +104,7 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
                 title={warn ? "phien dai, nen tach task" : `${a.name}: ${a.description}`}
                 onClick={() => onDesk(a)}
               >
-                <Sprite slot={`character.${ch}.${pose(t)}`} style={{ top: px(theme.sprite.characterY) }} />
+                <Sprite slot={charSlot(s.character?.replace(/^character\./, ""), a.id, pose(t))} style={{ top: px(theme.sprite.characterY) }} />
                 <Sprite slot="desk" style={{ top: px(theme.sprite.deskY) }} />
                 {t && <span className={`bubble ${t.status}`} style={{ bottom: `calc(100% + ${6 - Math.min(0, px(theme.sprite.characterY))}px)` }}>{t.status === "waiting" ? "Chờ anh" : bubble(t, tools[t.id])}</span>}
                 <span className="seat-label">

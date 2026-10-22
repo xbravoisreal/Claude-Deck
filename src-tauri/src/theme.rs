@@ -63,7 +63,7 @@ fn overlay(t: &mut Theme, v: &Value, dir: &Path) {
         let f = dir.join(file.as_str().unwrap_or_default());
         // Chi nhan file nam trong thu muc theme (chan "../").
         let inside = matches!((f.canonicalize(), &canon), (Ok(p), Some(d)) if p.starts_with(d));
-        match data_url(&f).filter(|_| inside) {
+        match inside.then(|| data_url(&f)).flatten() {
             Some(u) => {
                 t.slots.insert(slot.clone(), u);
             }
@@ -150,7 +150,9 @@ mod tests {
             assert!(t.slots[s].starts_with("data:image/svg+xml;base64,"), "{s}");
         }
         assert!(t.slots.keys().filter(|k| k.starts_with("character.") && k.ends_with(".typing")).count() >= 4);
-        assert!(t.colors["bg"].is_string());
+        for c in ["bg", "room", "border", "text", "muted", "error", "shadow"] {
+            assert!(t.colors[c].is_string(), "{c}"); // moi mau component dung deu phai co trong theme
+        }
         assert_eq!(t.sprite["frame"], 32);
         let _ = fs::remove_dir_all(&root);
     }

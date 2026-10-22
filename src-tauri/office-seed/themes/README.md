@@ -6,11 +6,12 @@ Moi theme la mot thu muc trong `themes/`. Chon theme trong Settings (⚙).
 
 1. Copy `themes/default` thanh `themes/<ten-moi>`.
 2. Sua `theme.json`:
-   - `colors`: mau giao dien (`bg`, `room`, `border`, `text`, `muted`, `accent`, `review`, `waiting`, `running`, `idle`, `warn`, `bubble-text`).
+   - `colors`: mau giao dien (`bg`, `room`, `border`, `text`, `muted`, `accent`, `review`, `waiting`, `running`, `idle`, `warn`, `bubble-text`, `error`, `shadow`, `input`).
    - `font`: font chu.
    - `sprite.frame`: kich thuoc mot khung anh (px). `sprite.scale`: phong to bao nhieu lan.
    - `sprite.characterY`, `sprite.deskY`: dich nhan vat / ban len xuong (px cua khung) cho dau nhan vat lo tren ban.
    - `slots`: ten slot -> file anh (SVG, PNG, GIF, WEBP) nam trong thu muc theme.
+   - So khung cua anh = chieu rong anh / `sprite.frame`. SVG phai co `width`/`height` (khong chi viewBox); PNG ve dung kich thuoc khung.
 3. Thay anh. Chi can ghi nhung slot muon doi; slot thieu se lay tu theme mac dinh.
 
 ## Slot

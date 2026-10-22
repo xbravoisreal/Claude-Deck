@@ -94,6 +94,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
         </button>
         {pd && pa && (
           <AgentPanel
+            key={`${pd.id}/${pa.id}`}
             dept={pd}
             agent={pa}
             tasks={tasks}

@@ -19,7 +19,10 @@
     "running": "#7fb77e",
     "idle": "#6b7080",
     "warn": "#e08a3c",
-    "bubble-text": "#1a1a1a"
+    "bubble-text": "#1a1a1a",
+    "error": "#e5484d",
+    "shadow": "#000000",
+    "input": "#22242b"
   },
   "slots": {
     "wall": "wall.svg",
