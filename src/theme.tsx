@@ -5,7 +5,7 @@ export type Theme = {
   name: string;
   colors: Record<string, string>;
   font: string;
-  sprite: { frame: number; scale: number; characterY?: number; deskY?: number; signSlice?: number };
+  sprite: { frame: number; scale: number; characterY?: number; deskY?: number; signSlice?: number; shelfSlice?: number };
   slots: Record<string, string>;
   errors: string[];
 };

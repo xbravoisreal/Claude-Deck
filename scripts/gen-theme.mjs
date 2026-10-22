@@ -211,12 +211,13 @@ const theme = {
   name: "default",
   font: "\"Cascadia Mono\", Consolas, monospace",
   // characterY/deskY: dich doc (px cua khung) so voi o ngoi, de dau nhan vat lo tren ban.
-  // signSlice: do day vien bien hieu (px cua anh) cho border-image 9 o.
-  sprite: { frame: 32, scale: 2, characterY: -12, deskY: 8, signSlice: 8 },
+  // signSlice/shelfSlice: do day vien (px cua anh) cho border-image 9 o cua bien hieu / ke thu muc du an.
+  sprite: { frame: 32, scale: 2, characterY: -12, deskY: 8, signSlice: 8, shelfSlice: 8 },
   colors: {
     bg: "#1f2128", room: "#2a2d36", border: "#3a3f4a", text: "#e3e3e3", muted: "#8a8f9c", accent: "#d97757",
     review: "#f5a524", waiting: "#e5b567", running: "#7fb77e", idle: "#6b7080", warn: "#e08a3c", "bubble-text": "#1a1a1a",
     error: "#e5484d", shadow: "#000000", input: "#22242b", "sign-text": "#3a2412",
+    "shelf-bg": "#3a2416", "shelf-text": "#f0d2a0",
   },
   slots,
 };

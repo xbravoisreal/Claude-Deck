@@ -1,12 +1,11 @@
 {
-  "cols": 6,
+  "cols": 7,
   "rows": 4,
   "floor": "floor.carpet",
   "sign": { "x": 0, "y": 0 },
-  "workspace": { "x": 5, "y": 0 },
+  "workspace": { "x": 4, "y": 0, "w": 3 },
   "decor": [
-    { "slot": "decor.window", "x": 4, "y": 0 },
-    { "slot": "decor.plant", "x": 5, "y": 3 },
+    { "slot": "decor.plant", "x": 6, "y": 3 },
     { "slot": "decor.lamp", "x": 0, "y": 3 }
   ],
   "seats": {

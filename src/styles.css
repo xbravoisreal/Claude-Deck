@@ -181,7 +181,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .room-mission { font-size: 10px; opacity: .85; }
 .room-pills { display: flex; gap: 4px; flex-wrap: wrap; }
 .room-pills:empty { display: none; }
-.room-shelf { position: absolute; width: var(--o-cell); height: var(--o-cell); padding: 0; border: 0; background: none; cursor: pointer; z-index: 2; }
+.room-shelf { position: absolute; height: var(--o-cell); padding: 0; border-style: solid; border-color: transparent; background: none; cursor: pointer; z-index: 2; display: flex; align-items: center; justify-content: center; image-rendering: pixelated; }
 .room-shelf:hover { filter: brightness(1.2); }
-.shelf-label { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: calc(var(--o-cell) + 24px); padding: 1px 4px; border-radius: 2px; background: var(--o-room); color: var(--o-text); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shelf-label { max-width: 100%; padding: 1px 5px; border: 1px solid var(--o-shelf-text); border-radius: 1px; background: var(--o-shelf-bg); color: var(--o-shelf-text); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
 .room-done { position: absolute; left: 8px; bottom: 6px; z-index: 3; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--o-room) 85%, transparent); font-size: 11px; color: var(--o-muted); }
+
+.shelf-label > span { unicode-bidi: isolate; }

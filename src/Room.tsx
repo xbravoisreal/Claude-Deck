@@ -3,8 +3,8 @@ import { bubble, type Dept, type Task, type AgentDef } from "./Office";
 
 type Seat = { x: number; y: number; character?: string };
 type Pos = { x: number; y: number };
-/** sign: vi tri bien hieu (ten + mo ta phong); workspace: vi tri ke sach chua thu muc du an. */
-type RoomCfg = { cols?: number; rows?: number; floor?: string; decor?: ({ slot: string } & Pos)[]; seats?: Record<string, Seat>; sign?: Pos; workspace?: Pos };
+/** sign: vi tri bien hieu (ten + mo ta phong); workspace: vi tri ke sach chua thu muc du an, w = so o chieu ngang (mac dinh 3). */
+type RoomCfg = { cols?: number; rows?: number; floor?: string; decor?: ({ slot: string } & Pos)[]; seats?: Record<string, Seat>; sign?: Pos; workspace?: Pos & { w?: number } };
 
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 
@@ -60,7 +60,8 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
   const theme = useTheme()!;
   const cell = cellOf(theme);
   const room = (dept.room ?? {}) as RoomCfg;
-  const { seats, cols, rows } = seatsFor(room, dept.agent_defs.map((a) => a.id), room.cols ?? Math.max(6, dept.agent_defs.length * 2 + 2), room.rows ?? 3);
+  const shelfW = Math.max(1, room.workspace?.w ?? 3);
+  const { seats, cols: seatCols, rows } = seatsFor(room, dept.agent_defs.map((a) => a.id), room.cols ?? Math.max(6, dept.agent_defs.length * 2 + 2), room.rows ?? 3);
   const floor = room.floor && theme.slots[room.floor] ? room.floor : Object.keys(theme.slots).find((k) => k.startsWith("floor.")) ?? "";
   const chars = characters(theme);
   /** Slot nhan vat cho tu the; thieu anh tu the thi lui ve typing, roi ve nhan vat mac dinh theo ten. */
@@ -77,8 +78,10 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
   const px = (v = 0) => v * theme.sprite.scale;
 
   const sign = room.sign ?? { x: 0, y: 0 };
-  const shelf = room.workspace ?? { x: cols - 1, y: 0 };
+  const shelf = room.workspace ?? { x: Math.max(0, seatCols - shelfW), y: 0 };
+  const cols = Math.max(seatCols, shelf.x + shelfW);
   const slice = theme.sprite.signSlice ?? 8;
+  const shelfSlice = theme.sprite.shelfSlice ?? 8;
   const wsName = dept.workspace.split(/[\/]/).filter(Boolean).pop();
 
   // Ca the phong la canh: san/tuong lat kin, bien hieu + ke sach nam tren tuong, "Da xong" noi o goc duoi.
@@ -116,9 +119,21 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
             {count("backlog") > 0 && <span className="pill">{count("backlog")} hang doi</span>}
           </span>
         </div>
-        <button className="room-shelf" style={{ left: shelf.x * cell, top: shelf.y * cell }} title={dept.workspace || "Chon thu muc du an"} onClick={onWorkspace}>
-          <Sprite slot="workspace" />
-          <span className="shelf-label">{wsName ?? "Chon thu muc"}</span>
+        {/* Ke thu muc du an: anh 9 o keo gian ngang theo w o. */}
+        <button
+          className="room-shelf"
+          style={{
+            left: shelf.x * cell,
+            top: shelf.y * cell,
+            width: shelfW * cell,
+            borderWidth: px(shelfSlice / 2),
+            borderImage: theme.slots.workspace ? `url(${theme.slots.workspace}) ${shelfSlice} fill / ${px(shelfSlice / 2)}px stretch` : undefined,
+          }}
+          title={dept.workspace || "Chon thu muc du an"}
+          onClick={onWorkspace}
+        >
+          {/* rtl + ltr ben trong: path qua dai thi cat dau, giu ten thu muc cuoi */}
+          <span className="shelf-label"><span dir="ltr">{dept.workspace || "Chon thu muc du an"}</span></span>
         </button>
         {dept.agent_defs.map((a) => {
             const s = seats[a.id];

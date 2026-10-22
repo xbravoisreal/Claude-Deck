@@ -6,7 +6,8 @@
     "scale": 2,
     "characterY": -12,
     "deskY": 8,
-    "signSlice": 8
+    "signSlice": 8,
+    "shelfSlice": 8
   },
   "colors": {
     "bg": "#1f2128",
@@ -24,7 +25,9 @@
     "error": "#e5484d",
     "shadow": "#000000",
     "input": "#22242b",
-    "sign-text": "#3a2412"
+    "sign-text": "#3a2412",
+    "shelf-bg": "#3a2416",
+    "shelf-text": "#f0d2a0"
   },
   "slots": {
     "wall": "wall.svg",

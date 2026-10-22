@@ -1,16 +1,15 @@
 {
-  "cols": 9,
+  "cols": 10,
   "rows": 4,
   "floor": "floor.wood",
   "sign": { "x": 0, "y": 0 },
-  "workspace": { "x": 8, "y": 0 },
+  "workspace": { "x": 7, "y": 0, "w": 3 },
   "decor": [
     { "slot": "decor.window", "x": 4, "y": 0 },
     { "slot": "decor.board", "x": 5, "y": 0 },
-    { "slot": "decor.window", "x": 6, "y": 0 },
-    { "slot": "decor.shelf", "x": 7, "y": 0 },
+    { "slot": "decor.shelf", "x": 6, "y": 0 },
     { "slot": "decor.plant", "x": 0, "y": 1 },
-    { "slot": "decor.coffee", "x": 8, "y": 1 },
+    { "slot": "decor.coffee", "x": 9, "y": 1 },
     { "slot": "decor.lamp", "x": 0, "y": 3 }
   ],
   "seats": {
