@@ -382,6 +382,17 @@ mod tests {
         json!({"update_id": 2, "message": m})
     }
 
+    /// Cham Credential Manager that (muc thu rieng, tu xoa). Chay tay: cargo test keyring_roundtrip -- --ignored
+    #[test]
+    #[ignore]
+    fn keyring_roundtrip() {
+        let e = keyring::Entry::new("claudedeck-test", "bot-token").unwrap();
+        e.set_password("123:abc").unwrap();
+        assert_eq!(e.get_password().unwrap(), "123:abc");
+        e.delete_credential().unwrap();
+        assert!(matches!(e.get_password(), Err(keyring::Error::NoEntry)));
+    }
+
     #[test]
     fn ignores_other_chats() {
         let mut st = Chat::default();
