@@ -33,7 +33,7 @@ Moi theme la mot thu muc trong `themes/`. Chon theme trong Settings (⚙).
   "cols": 8, "rows": 4, "floor": "floor.wood",
   "sign": { "x": 0, "y": 0 }, "workspace": { "x": 7, "y": 0 },
   "decor": [{ "slot": "decor.plant", "x": 0, "y": 1 }],
-  "seats": { "dev": { "x": 2, "y": 1, "character": "character.c2" } }
+  "seats": { "dev": { "x": 2, "y": 2, "character": "character.c2" } }
 }
 ```
 
