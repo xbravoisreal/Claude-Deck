@@ -144,7 +144,36 @@ const board = [
   "......F..F......", ".....F....F.....", "....F......F....", "................",
 ];
 
+// Bien hieu: ve dang 9 o (vien 4 pixel), CSS border-image keo gian theo chu.
+const sign = [
+  "DDDDDDDDDDDDDDDD",
+  "DLLLLLLLLLLLLLLD",
+  "DLWWWWWWWWWWWWLD",
+  "DLWWWWWwWWWWWWLD",
+  "DLWwWWWWWWWWwWLD",
+  "DLWWWWWWWWWWWWLD",
+  "DLWWWWWWWwWWWWLD",
+  "DLWWWwWWWWWWWWLD",
+  "DLWWWWWWWWWWWWLD",
+  "DLWWWWWWWWWwWWLD",
+  "DLWwWWWWWWWWWWLD",
+  "DLWWWWWWwWWWWWLD",
+  "DLWWWWWWWWWWWWLD",
+  "DLLLLLLLLLLLLLLD",
+  "DDDDDDDDDDDDDDDD",
+  "................",
+];
+// Ke sach trong: noi dat ten thu muc du an.
+const shelfEmpty = [
+  "SSSSSSSSSSSSSSSS", "SkkkkkkkkkkkkkkS", "SkkkkkkkkkkkkkkS", "SkkkkkkkkkkkkkkS",
+  "SSSSSSSSSSSSSSSS", "SkkkkkkkkkkkkkkS", "SkkkkkkkkkkkkkkS", "SkkkkkkkkkkkkkkS",
+  "SSSSSSSSSSSSSSSS", "SkkkkkkkkkkkkkkS", "SkkkkkkkkkkkkkkS", "SkkkkkkkkkkkkkkS",
+  "SSSSSSSSSSSSSSSS", "Ss............sS", "Ss............sS", "SS............SS",
+];
+
 const files = {};
+files["sign.svg"] = svg([sign], { D: "#5a3a22", L: "#8a5a34", W: "#d9a873", w: "#c8955f" });
+files["shelf-empty.svg"] = svg([shelfEmpty], { S: "#8a5a34", s: "#6e4628", k: "#4a3020" });
 for (const [id, c] of Object.entries(PEOPLE)) {
   const pal = { ...c, S: SKIN, E: "#2a2a35", W: "#6a4a3a", M: "#c96b6b" };
   files[`char-${id}-typing.svg`] = svg([typing1, typing2], pal);
@@ -164,6 +193,8 @@ files["board.svg"] = svg([board], { F: "#9aa0ad", w: "#fafafa", r: "#e5484d", b:
 
 const slots = {
   wall: "wall.svg",
+  sign: "sign.svg",
+  workspace: "shelf-empty.svg",
   desk: "desk.svg",
   "floor.wood": "floor-wood.svg",
   "floor.carpet": "floor-carpet.svg",
@@ -180,11 +211,12 @@ const theme = {
   name: "default",
   font: "\"Cascadia Mono\", Consolas, monospace",
   // characterY/deskY: dich doc (px cua khung) so voi o ngoi, de dau nhan vat lo tren ban.
-  sprite: { frame: 32, scale: 2, characterY: -12, deskY: 8 },
+  // signSlice: do day vien bien hieu (px cua anh) cho border-image 9 o.
+  sprite: { frame: 32, scale: 2, characterY: -12, deskY: 8, signSlice: 8 },
   colors: {
     bg: "#1f2128", room: "#2a2d36", border: "#3a3f4a", text: "#e3e3e3", muted: "#8a8f9c", accent: "#d97757",
     review: "#f5a524", waiting: "#e5b567", running: "#7fb77e", idle: "#6b7080", warn: "#e08a3c", "bubble-text": "#1a1a1a",
-    error: "#e5484d", shadow: "#000000", input: "#22242b",
+    error: "#e5484d", shadow: "#000000", input: "#22242b", "sign-text": "#3a2412",
   },
   slots,
 };

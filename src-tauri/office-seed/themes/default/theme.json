@@ -5,7 +5,8 @@
     "frame": 32,
     "scale": 2,
     "characterY": -12,
-    "deskY": 8
+    "deskY": 8,
+    "signSlice": 8
   },
   "colors": {
     "bg": "#1f2128",
@@ -22,10 +23,13 @@
     "bubble-text": "#1a1a1a",
     "error": "#e5484d",
     "shadow": "#000000",
-    "input": "#22242b"
+    "input": "#22242b",
+    "sign-text": "#3a2412"
   },
   "slots": {
     "wall": "wall.svg",
+    "sign": "sign.svg",
+    "workspace": "shelf-empty.svg",
     "desk": "desk.svg",
     "floor.wood": "floor-wood.svg",
     "floor.carpet": "floor-carpet.svg",

@@ -357,7 +357,7 @@ mod tests {
         let root = tmp("seed-room");
         seed_office(&root).unwrap();
         let o = load_office(&root);
-        assert_eq!(o[1].room["seats"]["dev"]["y"], 2);
+        assert_eq!(o[1].room["seats"]["dev"]["y"], 3);
         assert_eq!(o[0].room["floor"], "floor.carpet");
         assert!(root.join("themes/default/theme.json").exists());
         assert!(root.join("themes/default/desk.svg").exists());

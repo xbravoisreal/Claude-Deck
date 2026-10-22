@@ -2,7 +2,9 @@ import { Sprite, useTheme, characters, cellOf } from "./theme";
 import { bubble, type Dept, type Task, type AgentDef } from "./Office";
 
 type Seat = { x: number; y: number; character?: string };
-type RoomCfg = { cols?: number; rows?: number; floor?: string; decor?: { slot: string; x: number; y: number }[]; seats?: Record<string, Seat> };
+type Pos = { x: number; y: number };
+/** sign: vi tri bien hieu (ten + mo ta phong); workspace: vi tri ke sach chua thu muc du an. */
+type RoomCfg = { cols?: number; rows?: number; floor?: string; decor?: ({ slot: string } & Pos)[]; seats?: Record<string, Seat>; sign?: Pos; workspace?: Pos };
 
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 
@@ -22,16 +24,17 @@ export function seatsFor(room: RoomCfg, agents: string[], cols: number, rows: nu
   }
   const free = (x: number, y: number) => !decor.has(`${x},${y}`) && ![x - 1, x, x + 1].some((k) => used.has(`${k},${y}`));
   for (const a of agents.filter((a) => !seats[a])) {
-    // Dai b gom 2 hang (1+3b, 2+3b); cot 1,3,5... luan phien hang tren/duoi; giua cac dai chua 1 hang trong cho nhan.
+    // Dai b gom 2 hang (2+3b, 3+3b); hang 1 de trong cho bong thoai (khong de len bien hieu tren tuong);
+    // cot 1,3,5... luan phien hang tren/duoi; giua cac dai chua 1 hang trong cho nhan.
     for (let b = 0; !seats[a]; b++) {
       for (let k = 0; 1 + 2 * k < cols - 1 && !seats[a]; k++) {
-        const x = 1 + 2 * k, y = 1 + 3 * b + (k % 2);
+        const x = 1 + 2 * k, y = 2 + 3 * b + (k % 2);
         if (free(x, y)) {
           seats[a] = { x, y };
           used.add(`${x},${y}`);
         }
       }
-      if (b > agents.length) seats[a] = { x: 1, y: 1 + 3 * b }; // phong qua hep: xep doc
+      if (b > agents.length) seats[a] = { x: 1, y: 2 + 3 * b }; // phong qua hep: xep doc
     }
   }
   const all = Object.values(seats);
@@ -50,9 +53,9 @@ const ago = (ms: number) => {
   return m < 1 ? "vua xong" : m < 60 ? `${m} phut` : `${Math.round(m / 60)} gio`;
 };
 
-export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory }: {
+export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory, onWorkspace }: {
   dept: Dept; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>; warnK: number;
-  onDesk: (a: AgentDef) => void; onHistory: () => void;
+  onDesk: (a: AgentDef) => void; onHistory: () => void; onWorkspace: () => void;
 }) {
   const theme = useTheme()!;
   const cell = cellOf(theme);
@@ -73,29 +76,51 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
   const done = mine.filter((t) => t.status === "done" && t.reason !== "da huy").sort((a, b) => (b.finished || b.created) - (a.finished || a.created));
   const px = (v = 0) => v * theme.sprite.scale;
 
+  const sign = room.sign ?? { x: 0, y: 0 };
+  const shelf = room.workspace ?? { x: cols - 1, y: 0 };
+  const slice = theme.sprite.signSlice ?? 8;
+  const wsName = dept.workspace.split(/[\/]/).filter(Boolean).pop();
+
+  // Ca the phong la canh: san/tuong lat kin, bien hieu + ke sach nam tren tuong, "Da xong" noi o goc duoi.
   return (
-    <>
-      <div className="room-pills">
-        {count("review") > 0 && <span className="pill review">{count("review")} Chờ síp</span>}
-        {count("waiting") > 0 && <span className="pill waiting">{count("waiting")} Chờ anh</span>}
-        {count("running") > 0 && <span className="pill running">{count("running")} Dang lam</span>}
-        {count("backlog") > 0 && <span className="pill">{count("backlog")} hang doi</span>}
-      </div>
-      <div className="room-scroll">
+    <div className="room-scroll">
+      <div
+        className="room-floor"
+        style={{
+          minWidth: cols * cell,
+          minHeight: rows * cell + 28, // + cho nhan duoi ban hang cuoi
+          backgroundImage: [theme.slots.wall, theme.slots[floor]].filter(Boolean).map((u) => `url(${u})`).join(","),
+          backgroundRepeat: "repeat-x, repeat",
+          backgroundSize: `${cell}px ${cell}px`,
+        }}
+      >
+        {(room.decor ?? []).map((d, i) => (
+          <Sprite key={i} slot={d.slot} style={{ left: d.x * cell, top: d.y * cell }} />
+        ))}
         <div
-          className="room-floor"
+          className={`room-sign${theme.slots.sign ? "" : " plain"}`}
           style={{
-            width: cols * cell,
-            height: rows * cell,
-            backgroundImage: [theme.slots.wall, theme.slots[floor]].filter(Boolean).map((u) => `url(${u})`).join(","),
-            backgroundRepeat: "repeat-x, repeat",
-            backgroundSize: `${cell}px ${cell}px`,
+            left: sign.x * cell + 6,
+            top: sign.y * cell + 4,
+            maxWidth: Math.max(3, Math.min(cols - 1, 4)) * cell - 12,
+            borderWidth: px(slice / 2),
+            borderImage: theme.slots.sign ? `url(${theme.slots.sign}) ${slice} fill / ${px(slice / 2)}px stretch` : undefined,
           }}
         >
-          {(room.decor ?? []).map((d, i) => (
-            <Sprite key={i} slot={d.slot} style={{ left: d.x * cell, top: d.y * cell }} />
-          ))}
-          {dept.agent_defs.map((a) => {
+          <b>{dept.icon} {dept.name}</b>
+          <span className="room-mission">{dept.mission}</span>
+          <span className="room-pills">
+            {count("review") > 0 && <span className="pill review">{count("review")} Chờ síp</span>}
+            {count("waiting") > 0 && <span className="pill waiting">{count("waiting")} Chờ anh</span>}
+            {count("running") > 0 && <span className="pill running">{count("running")} Dang lam</span>}
+            {count("backlog") > 0 && <span className="pill">{count("backlog")} hang doi</span>}
+          </span>
+        </div>
+        <button className="room-shelf" style={{ left: shelf.x * cell, top: shelf.y * cell }} title={dept.workspace || "Chon thu muc du an"} onClick={onWorkspace}>
+          <Sprite slot="workspace" />
+          <span className="shelf-label">{wsName ?? "Chon thu muc"}</span>
+        </button>
+        {dept.agent_defs.map((a) => {
             const s = seats[a.id];
             const t = current(a.id);
             const warn = t && (ctx[t.id] ?? 0) >= warnK * 1000;
@@ -117,16 +142,15 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
               </button>
             );
           })}
-        </div>
+        {done.length > 0 && (
+          <div className="room-done">
+            <span>Da xong {done.length}</span>
+            {done.slice(0, 5).map((t) => (
+              <button key={t.id} className="chip" title={`${t.id} · ${t.summary}`} onClick={onHistory}>{t.title}</button>
+            ))}
+          </div>
+        )}
       </div>
-      {done.length > 0 && (
-        <div className="room-done">
-          <span>Da xong {done.length}</span>
-          {done.slice(0, 5).map((t) => (
-            <button key={t.id} className="chip" title={`${t.id} · ${t.summary}`} onClick={onHistory}>{t.title}</button>
-          ))}
-        </div>
-      )}
-    </>
+    </div>
   );
 }

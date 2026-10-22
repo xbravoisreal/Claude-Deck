@@ -80,13 +80,17 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
         {theme.errors.map((e) => <div key={e} className="office-error">theme: {e}</div>)}
         {depts.map((d) => (
           <div key={d.id} className={`room${d.agent_defs.length > 3 ? " wide" : ""}`}>
-            <div className="room-head">
-              <b>{d.icon} {d.name}</b>
-              <button className="room-ws" title="Doi thu muc du an" onClick={() => safe(() => pickWorkspace(d))}>{d.workspace || "Chon thu muc du an"}</button>
-            </div>
-            <div className="room-mission">{d.mission}</div>
-            {d.errors.map((e) => <div key={e} className="office-error">{e}</div>)}
-            <Room dept={d} tasks={tasks} ctx={ctx} tools={tools} warnK={prefs.warnK} onDesk={(a) => setPanel({ dept: d.id, agent: a.id })} onHistory={onHistory} />
+            {d.errors.map((e) => <div key={e} className="office-error room-err">{e}</div>)}
+            <Room
+              dept={d}
+              tasks={tasks}
+              ctx={ctx}
+              tools={tools}
+              warnK={prefs.warnK}
+              onDesk={(a) => setPanel({ dept: d.id, agent: a.id })}
+              onHistory={onHistory}
+              onWorkspace={() => safe(() => pickWorkspace(d))}
+            />
           </div>
         ))}
         <button className="room room-new" title="Them thu muc trong departments/ (xem themes/README.md)" onClick={() => reveal(`${prefs.root}\\departments`)}>

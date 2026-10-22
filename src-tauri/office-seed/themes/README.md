@@ -19,6 +19,8 @@ Moi theme la mot thu muc trong `themes/`. Chon theme trong Settings (⚙).
 | Slot | Noi dung |
 |---|---|
 | `wall` | o tuong (hang tren cung cua phong) |
+| `sign` | bien hieu ghi ten + mo ta phong; ve dang 9 o, vien day `sprite.signSlice` px, phan giua tu keo gian |
+| `workspace` | ke sach trong, ghi ten thu muc du an; bam de doi thu muc |
 | `floor.<id>` | o san, phong chon bang `room.json` -> `floor` |
 | `desk` | ban lam viec, ve de len nua duoi nhan vat |
 | `character.<id>.typing` / `.waiting` / `.idle` | nhan vat: dang lam / cho sep / ranh. Anh nhieu khung xep ngang, moi khung `frame` px, tu chay animation |
@@ -29,13 +31,15 @@ Moi theme la mot thu muc trong `themes/`. Chon theme trong Settings (⚙).
 ```json
 {
   "cols": 8, "rows": 4, "floor": "floor.wood",
+  "sign": { "x": 0, "y": 0 }, "workspace": { "x": 7, "y": 0 },
   "decor": [{ "slot": "decor.plant", "x": 0, "y": 1 }],
   "seats": { "dev": { "x": 2, "y": 1, "character": "character.c2" } }
 }
 ```
 
 - `x`, `y`: o tinh tu goc trai tren (hang 0 la tuong).
-- Agent khong co trong `seats` duoc xep tu dong vao o trong. Bo `character` thi chon theo ten Agent.
+- Nen de hang 1 trong: bong thoai cua ban hang 2 hien o do, khong de len bien hieu.
+- Agent khong co trong `seats` duoc xep tu dong (zic zac tu hang 2) vao o trong. Bo `character` thi chon theo ten Agent.
 - Sua xong bam tab Office lai (hoac doi theme) de tai lai.
 
 Theme `default` do Claude ve bang `scripts/gen-theme.mjs` (CC0, dung tu do).
