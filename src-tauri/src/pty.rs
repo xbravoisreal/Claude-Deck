@@ -46,16 +46,18 @@ fn signal_port(app: &AppHandle) -> u16 {
 /// Ghi file settings chua hook Stop + Notification tro ve signal server (gop vao `extra`), tra ve duong dan.
 fn hook_settings(app: &AppHandle, id: &str, extra: Option<serde_json::Value>) -> Result<String, String> {
     let port = signal_port(app);
-    // curl doc JSON cua hook tu stdin (--data-binary @-) va gui len server.
-    let hook = |kind: &str| {
-        let cmd = format!("curl.exe -s -m 2 --data-binary @- http://127.0.0.1:{port}/{id}/{kind}");
-        serde_json::json!([{ "hooks": [{ "type": "command", "command": cmd }] }])
-    };
+    let hook = |kind: &str| serde_json::json!([{ "hooks": [{ "type": "command", "command": hook_cmd(port, id, kind) }] }]);
     let mut settings = extra.filter(|v| v.is_object()).unwrap_or_else(|| serde_json::json!({}));
     settings["hooks"] = serde_json::json!({ "Stop": hook("stop"), "Notification": hook("notify") });
     let path = std::env::temp_dir().join(format!("claudedeck-hooks-{id}.json"));
     std::fs::write(&path, settings.to_string()).map_err(err)?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// curl doc JSON cua hook tu stdin va gui len server. `"@-"` phai co nhay: claude co the chay hook bang
+/// PowerShell, ma `@-` tran la loi cu phap o do (hook chet im, task khong bao gio sang Cho sip).
+fn hook_cmd(port: u16, id: &str, kind: &str) -> String {
+    format!("curl.exe -s -m 2 --data-binary \"@-\" http://127.0.0.1:{port}/{id}/{kind}")
 }
 
 /// Chuoi nhay don cua PowerShell: `'` trong chuoi viet thanh `''`.
@@ -198,6 +200,11 @@ mod tests {
         assert_eq!(parse_signal("GET /abc/stop HTTP/1.1\r\n\r\n"), Some(("abc".into(), "stop".into(), String::new())));
         assert_eq!(parse_signal("GET /abc HTTP/1.1\r\n\r\n"), Some(("abc".into(), "stop".into(), String::new())));
         assert_eq!(parse_signal("rac"), None);
+    }
+
+    #[test]
+    fn hook_cmd_parses_in_powershell() {
+        assert!(hook_cmd(1, "a", "stop").contains(r#"--data-binary "@-" "#));
     }
 }
 

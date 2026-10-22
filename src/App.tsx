@@ -234,7 +234,6 @@ export default function App() {
   };
 
   const onIdle = (ws: Ws, stop: boolean, message: string) => {
-    alert(ws.id);
     if (!ws.task) return;
     const id = ws.task;
     const was = tasksRef.current.find((t) => t.id === id)?.status;
