@@ -225,7 +225,13 @@ export default function App() {
     sent.current.add(`${id}:${kind}`);
     invoke("tg_notify", { id, kind });
   };
-  const unsent = (id: string) => ["review", "waiting", "permission"].forEach((k) => sent.current.delete(`${id}:${k}`));
+  // Hen gio 45s "Cho anh" cua tung task; huy khi task chay lai de khong gui nham cho lan cho sau.
+  const waitTimers = useRef(new Map<string, number>());
+  const unsent = (id: string) => {
+    ["review", "waiting", "permission"].forEach((k) => sent.current.delete(`${id}:${k}`));
+    clearTimeout(waitTimers.current.get(id));
+    waitTimers.current.delete(id);
+  };
 
   const onIdle = (ws: Ws, stop: boolean, message: string) => {
     alert(ws.id);
@@ -243,7 +249,8 @@ export default function App() {
         notify(id, "permission");
       } else if (t.status === "waiting") {
         // Hoi sep: chi bao neu 45s sau van con cho.
-        setTimeout(() => tasksRef.current.find((x) => x.id === id)?.status === "waiting" && notify(id, "waiting"), 45000);
+        clearTimeout(waitTimers.current.get(id));
+        waitTimers.current.set(id, window.setTimeout(() => tasksRef.current.find((x) => x.id === id)?.status === "waiting" && notify(id, "waiting"), 45000));
       }
       return startNext();
     }, fail);
@@ -252,6 +259,8 @@ export default function App() {
     const t = tasksRef.current.find((x) => x.id === ws.task);
     if (t?.status === "waiting") {
       unsent(t.id);
+      // Da tra loi ngay tren app -> bo nut tren tin Telegram (neu co) de khong bam nham vao lan hoi sau.
+      invoke("tg_resolved", { id: t.id, text: "Đã trả lời trên app" });
       invoke("task_busy", { root: root(), id: t.id }).then(refresh, fail);
     }
   };

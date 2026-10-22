@@ -158,12 +158,15 @@ pub fn parse_signal(req: &str) -> Option<(String, String, String)> {
     Some((id.into(), kind.into(), msg))
 }
 
-/// Doc tron mot request (header + than theo Content-Length), toi da 64KB, cho toi da 2s.
+/// Doc tron mot request (header + than theo Content-Length), toi da 64KB, tong cong toi da 2s
+/// (server mot luong: client gui nho giot khong duoc giu no lau).
 fn read_request(stream: &mut std::net::TcpStream) -> String {
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     let mut data = Vec::new();
     let mut buf = [0u8; 4096];
     while data.len() < 65536 {
+        let Some(left) = deadline.checked_duration_since(std::time::Instant::now()).filter(|d| !d.is_zero()) else { break };
+        let _ = stream.set_read_timeout(Some(left));
         let n = match stream.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(n) => n,

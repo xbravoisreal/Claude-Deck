@@ -2,7 +2,7 @@ use crate::office::load_office;
 use crate::tasks::{self, Task};
 use serde_json::{json, Value};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -41,8 +41,10 @@ fn clip(s: &str, n: usize) -> String {
 /// Doc mot update. Chi nhan tu dung chat cua sep; nguoi khac -> Ignore va khong dong vao trang thai.
 /// Tra ve kem callback_query id (de answerCallbackQuery).
 pub fn parse_update(u: &Value, chat_id: i64, st: &mut Chat) -> (Action, Option<String>) {
+    // Chat rieng (id > 0): nguoi gui cung phai la sep. Nhom (id < 0): moi thanh vien nhom deu duyet duoc.
+    let sender_ok = |x: &Value| chat_id < 0 || x["from"]["id"].as_i64().is_none_or(|f| f == chat_id);
     if let Some(q) = u.get("callback_query") {
-        if q["message"]["chat"]["id"].as_i64() != Some(chat_id) {
+        if q["message"]["chat"]["id"].as_i64() != Some(chat_id) || !sender_ok(q) {
             return (Action::Ignore, None);
         }
         let qid = q["id"].as_str().map(String::from);
@@ -61,7 +63,7 @@ pub fn parse_update(u: &Value, chat_id: i64, st: &mut Chat) -> (Action, Option<S
         return (a, qid);
     }
     let m = &u["message"];
-    if m["chat"]["id"].as_i64() != Some(chat_id) {
+    if m["chat"]["id"].as_i64() != Some(chat_id) || !sender_ok(m) {
         return (Action::Ignore, None);
     }
     match (m["text"].as_str().map(str::trim).filter(|t| !t.is_empty()), &st.pending_rework) {
@@ -208,12 +210,16 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
                 let _ = send(c, &format!("↩ Đã gửi làm lại: <b>{}</b>", escape(&t.title)), &Value::Null);
                 changed();
             }
-            Err(_) => {
-                let _ = send(c, "Task đã xử lý rồi.", &Value::Null);
+            Err(e) => {
+                let _ = send(c, &format!("Không làm lại được: {}", escape(&e)), &Value::Null);
             }
         },
-        Action::Allow(id) | Action::Deny(id) if find(&c.root, &id).is_some_and(|t| t.status == "waiting") => {
+        // Nut chi con hieu luc khi dung tin dang treo cua lan xin quyen hien tai (tin cu / lan hoi khac -> bo qua).
+        Action::Allow(id) | Action::Deny(id)
+            if find(&c.root, &id).is_some_and(|t| t.status == "waiting" && t.reason.starts_with("xin quyen") && t.tg_msg == cb_msg) =>
+        {
             let allow = u["callback_query"]["data"].as_str().is_some_and(|d| d.starts_with("al:"));
+            let _ = tasks::update(&c.root, &id, |t| Ok(t.tg_msg = 0));
             let _ = app.emit("office-permission", json!({ "task": id, "allow": allow }));
             answer(c, &qid, if allow { "Đã cho phép" } else { "Đã từ chối" });
             edit(c, cb_msg, &format!("{} · task {}", if allow { "✅ Đã cho phép" } else { "⛔ Đã từ chối" }, escape(&id)));
@@ -223,23 +229,54 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
     }
 }
 
-/// Vong long-polling getUpdates. Loi mang/token -> cho 5s, 10s... toi da 60s.
+/// Offset getUpdates dung chung moi vong (cau hinh lai khong doc lai update da xu ly).
+static OFFSET: AtomicI64 = AtomicI64::new(0);
+/// Cac chat da nhan cho bot (ghi tu vong polling, truoc khi loc chat id) de "Tim chat id" khong phai goi getUpdates song song.
+static SEEN: Mutex<Vec<(i64, String)>> = Mutex::new(Vec::new());
+
+fn remember_chats(list: &Value) {
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    for u in list.as_array().into_iter().flatten() {
+        let ch = &u["message"]["chat"];
+        if let Some(id) = ch["id"].as_i64().filter(|id| !seen.iter().any(|(x, _)| x == id)) {
+            let name = ch["title"].as_str().or(ch["username"].as_str()).or(ch["first_name"].as_str()).unwrap_or("?");
+            seen.push((id, name.into()));
+        }
+    }
+}
+
+/// Bao Telegram da xu ly toi OFFSET (Telegram chi ghi nhan offset o lan getUpdates ke tiep).
+pub fn confirm_offset() {
+    let (Ok(c), off) = (cfg(), OFFSET.load(Ordering::SeqCst)) else { return };
+    if off > 0 {
+        let _ = api(&c.token, "getUpdates", json!({ "offset": off, "timeout": 0, "limit": 1 }));
+    }
+}
+
+/// Vong long-polling getUpdates. Loi mang/token -> cho 5s, 10s... toi da 60s. Chi vong dang song moi ghi trang thai.
 fn poll(app: AppHandle, c: Cfg, gen: u64) {
-    let (mut offset, mut chat, mut wait) = (0i64, Chat::default(), 5u64);
-    while GEN.load(Ordering::SeqCst) == gen {
-        match api(&c.token, "getUpdates", json!({ "offset": offset, "timeout": 30, "allowed_updates": ["message", "callback_query"] })) {
-            Ok(list) => {
+    let (mut chat, mut wait) = (Chat::default(), 5u64);
+    let live = || GEN.load(Ordering::SeqCst) == gen;
+    while live() {
+        let off = OFFSET.load(Ordering::SeqCst);
+        match api(&c.token, "getUpdates", json!({ "offset": off, "timeout": 30, "allowed_updates": ["message", "callback_query"] })) {
+            Ok(list) if live() => {
                 set_status("dang ket noi");
                 wait = 5;
+                remember_chats(&list);
                 for u in list.as_array().into_iter().flatten() {
-                    offset = offset.max(u["update_id"].as_i64().unwrap_or(0) + 1);
-                    if GEN.load(Ordering::SeqCst) == gen {
+                    // Ghi offset truoc khi xu ly: loi giua chung cung khong xu ly lai lan nua.
+                    OFFSET.fetch_max(u["update_id"].as_i64().unwrap_or(0) + 1, Ordering::SeqCst);
+                    if live() {
                         handle(&app, &c, u, &mut chat);
                     }
                 }
             }
+            Ok(_) => {}
             Err(e) => {
-                set_status(format!("loi: {e}"));
+                if live() {
+                    set_status(format!("loi: {e}"));
+                }
                 std::thread::sleep(Duration::from_secs(wait));
                 wait = (wait * 2).min(60);
             }
@@ -251,6 +288,9 @@ fn poll(app: AppHandle, c: Cfg, gen: u64) {
 #[tauri::command]
 pub fn tg_set_token(token: String) -> Result<(), String> {
     let e = entry()?;
+    // Bot khac co update_id khac: bat dau doc lai tu dau.
+    OFFSET.store(0, Ordering::SeqCst);
+    SEEN.lock().unwrap_or_else(|e| e.into_inner()).clear();
     if token.trim().is_empty() {
         match e.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
@@ -299,16 +339,12 @@ pub async fn tg_test(chat_id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn tg_detect_chat() -> Result<Vec<(i64, String)>, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let list = api(&token().ok_or("chua luu token")?, "getUpdates", json!({ "timeout": 0 }))?;
-        let mut out: Vec<(i64, String)> = vec![];
-        for u in list.as_array().into_iter().flatten() {
-            let ch = &u["message"]["chat"];
-            if let Some(id) = ch["id"].as_i64().filter(|id| !out.iter().any(|(x, _)| x == id)) {
-                let name = ch["title"].as_str().or(ch["username"].as_str()).or(ch["first_name"].as_str()).unwrap_or("?");
-                out.push((id, name.into()));
-            }
+        // Bot dang chay thi vong polling da ghi lai chat (goi getUpdates song song se bi 409 va cuop update).
+        if cfg().is_err() {
+            let list = api(&token().ok_or("chua luu token")?, "getUpdates", json!({ "timeout": 0 }))?;
+            remember_chats(&list);
         }
-        Ok(out)
+        Ok(SEEN.lock().unwrap_or_else(|e| e.into_inner()).clone())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -400,6 +436,21 @@ mod tests {
         st.pending_rework = Some("t1".into());
         assert_eq!(parse_update(&msg(999, Some("lam lai di")), ME, &mut st).0, Action::Ignore);
         assert_eq!(st.pending_rework.as_deref(), Some("t1")); // nguoi la khong pha duoc hoi thoai
+    }
+
+    #[test]
+    fn private_chat_requires_owner_as_sender() {
+        // Chat rieng: chat.id == from.id cua sep. Tin "chuyen tiep" hay update gia co from khac -> bo qua.
+        let mut st = Chat::default();
+        let mut u = cb(ME, "ok:t1");
+        u["callback_query"]["from"] = json!({"id": 777});
+        assert_eq!(parse_update(&u, ME, &mut st).0, Action::Ignore);
+        u["callback_query"]["from"] = json!({"id": ME});
+        assert_eq!(parse_update(&u, ME, &mut st).0, Action::Approve("t1".into()));
+        st.pending_rework = Some("t1".into());
+        let mut m = msg(ME, Some("x"));
+        m["message"]["from"] = json!({"id": 777});
+        assert_eq!(parse_update(&m, ME, &mut st).0, Action::Ignore);
     }
 
     #[test]

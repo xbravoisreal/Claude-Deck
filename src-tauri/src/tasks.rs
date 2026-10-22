@@ -235,7 +235,7 @@ fn new_session_id() -> String {
 pub(crate) fn summary(dir: &str) -> String {
     let Ok(s) = std::fs::read_to_string(Path::new(dir).join("result.md")) else { return String::new() };
     let body = s.strip_prefix("---").and_then(|r| r.split_once("\n---")).map_or(s.as_str(), |(_, b)| b);
-    body.lines().map(str::trim).filter(|l| !l.is_empty()).take(2).collect::<Vec<_>>().join("\n")
+    body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("```")).take(2).collect::<Vec<_>>().join("\n")
 }
 
 /// Sua mot task theo id, tra ve ban sau khi sua.
@@ -751,6 +751,9 @@ mod tests {
         let root = tmp("summary");
         fs::write(root.join("result.md"), "---\ntask: a\n---\n\nDong 1\n\nDong 2\nDong 3").unwrap();
         assert_eq!(summary(&root.to_string_lossy()), "Dong 1\nDong 2");
+        // Tom tat di ra Telegram: bo dong rao code.
+        fs::write(root.join("result.md"), "```rust\nDong A\n```\nDong B").unwrap();
+        assert_eq!(summary(&root.to_string_lossy()), "Dong A\nDong B");
         let _ = fs::remove_dir_all(&root);
     }
 

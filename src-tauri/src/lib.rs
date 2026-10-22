@@ -10,6 +10,9 @@ mod usage;
 
 pub fn run() {
     tauri::Builder::default()
+        // Phai dang ky dau tien. App dang an duoi khay ma mo lan nua -> hien cua so cu, khong chay ban thu hai
+        // (hai ban se tranh nhau getUpdates cua bot va mo hai signal server).
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| show_main(app)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
@@ -89,7 +92,10 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, e| match e.id.as_ref() {
             "show" => show_main(app),
-            "quit" => app.exit(0),
+            "quit" => {
+                telegram::confirm_offset();
+                app.exit(0)
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, e| {
