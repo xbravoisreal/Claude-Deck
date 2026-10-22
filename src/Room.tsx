@@ -105,7 +105,8 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
           style={{
             left: sign.x * cell + 6,
             top: sign.y * cell + 4,
-            maxWidth: Math.max(3, Math.min(cols - 1, 4)) * cell - 12,
+            // Bien hieu khong dai qua 4 o va khong de len ke thu muc cung hang.
+            maxWidth: Math.max(2, Math.min(4, shelf.y === sign.y && shelf.x > sign.x ? shelf.x - sign.x : 4)) * cell - 12,
             borderWidth: px(slice / 2),
             borderImage: theme.slots.sign ? `url(${theme.slots.sign}) ${slice} fill / ${px(slice / 2)}px stretch` : undefined,
           }}

@@ -33,6 +33,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
   const [theme, setTheme] = useState<Theme | null>(null);
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<{ dept: string; agent: string } | null>(null);
+  const [newRoom, setNewRoom] = useState<{ name: string; icon: string; mission: string } | null>(null);
 
   const reload = () =>
     invoke<Dept[]>("office_load", { root: prefs.root }).then((d) => (setDepts(d), onDepts(d)), (e) => setError(String(e)));
@@ -68,6 +69,14 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
     onTasks();
   };
 
+  const createRoom = () =>
+    safe(async () => {
+      if (!newRoom?.name.trim()) return;
+      await invoke("office_create_department", { root: prefs.root, ...newRoom });
+      setNewRoom(null);
+      reload();
+    });
+
   const reveal = (path: string) => invoke("open_in_editor", { path }).catch((e) => setError(String(e)));
   const pd = panel && depts.find((d) => d.id === panel.dept);
   const pa = pd?.agent_defs.find((a) => a.id === panel!.agent);
@@ -93,9 +102,24 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
             />
           </div>
         ))}
-        <button className="room room-new" title="Them thu muc trong departments/ (xem themes/README.md)" onClick={() => reveal(`${prefs.root}\\departments`)}>
-          + Mo phong
-        </button>
+        {/* Nut + tron goc duoi trai: tao phong moi. */}
+        {newRoom && <div className="drawer-backdrop" onClick={() => setNewRoom(null)} />}
+        {newRoom && (
+          <div className="new-room">
+            <b>Mo phong moi</b>
+            <div className="new-room-row">
+              <input className="new-room-icon" value={newRoom.icon} onChange={(e) => setNewRoom({ ...newRoom, icon: e.target.value })} />
+              <input autoFocus placeholder="Ten phong (vd Content Media)" value={newRoom.name} onChange={(e) => setNewRoom({ ...newRoom, name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && createRoom()} />
+            </div>
+            <input placeholder="Nhiem vu cua phong" value={newRoom.mission} onChange={(e) => setNewRoom({ ...newRoom, mission: e.target.value })} onKeyDown={(e) => e.key === "Enter" && createRoom()} />
+            <div className="set-actions">
+              <button onClick={() => reveal(`${prefs.root}\\departments`)}>Mo thu muc</button>
+              <button onClick={() => setNewRoom(null)}>Huy</button>
+              <button className="primary" disabled={!newRoom.name.trim()} onClick={createRoom}>Tao</button>
+            </div>
+          </div>
+        )}
+        <button className="room-add" title="Mo phong moi" onClick={() => setNewRoom(newRoom ? null : { name: "", icon: "🏢", mission: "" })}>+</button>
         {pd && pa && <div className="drawer-backdrop" onClick={() => setPanel(null)} />}
         {pd && pa && (
           <AgentPanel

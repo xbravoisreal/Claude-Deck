@@ -69,7 +69,14 @@ pub fn load_office(root: &Path) -> Vec<Department> {
         .filter_map(Result::ok)
         .filter_map(|e| {
             let dir = e.path();
+            if !dir.is_dir() {
+                return None;
+            }
             let id = dir.file_name()?.to_string_lossy().into_owned();
+            // Thu muc phong moi tao tay chua co department.json -> tao file toi thieu (ten = ten thu muc).
+            if !dir.join("department.json").exists() {
+                let _ = write_department(&dir, &DeptConfig { id: id.clone(), name: id.clone(), icon: "🏢".into(), ..Default::default() });
+            }
             let parsed = std::fs::read_to_string(dir.join("department.json"))
                 .map_err(err)
                 .and_then(|s| serde_json::from_str::<DeptConfig>(&s).map_err(err));
@@ -172,6 +179,45 @@ pub fn office_load(root: String) -> Result<Vec<Department>, String> {
     let root = Path::new(&root);
     seed_office(root).map_err(err)?;
     Ok(load_office(root))
+}
+
+fn write_department(dir: &Path, c: &DeptConfig) -> std::io::Result<()> {
+    let mut v = serde_json::to_value(c)?;
+    v["defaults"] = serde_json::json!({ "maxTokens": 4_000_000 });
+    std::fs::write(dir.join("department.json"), serde_json::to_string_pretty(&v)?)
+}
+
+/// Tao phong moi (nut + tren man Office): thu muc theo ten (chu thuong, khong dau cach), department.json, room.json.
+/// Tra ve id phong. Agent them sau (sua department.json hoac qua HR).
+#[tauri::command]
+pub fn office_create_department(root: String, name: String, icon: String, mission: String) -> Result<String, String> {
+    let mut id = String::new();
+    for c in name.trim().to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            id.push(c);
+        } else if !id.ends_with('-') {
+            id.push('-');
+        }
+    }
+    let id = id.trim_matches('-').to_string();
+    if id.is_empty() {
+        return Err("ten phong can co chu cai hoac so (khong dau)".into());
+    }
+    let dir = Path::new(&root).join("departments").join(&id);
+    if dir.exists() {
+        return Err(format!("da co phong {id}"));
+    }
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let icon = if icon.trim().is_empty() { "🏢".into() } else { icon.trim().into() };
+    write_department(&dir, &DeptConfig { id: id.clone(), name: name.trim().into(), icon, mission: mission.trim().into(), ..Default::default() }).map_err(err)?;
+    let room = serde_json::json!({
+        "cols": 6, "rows": 4, "floor": "floor.wood",
+        "sign": { "x": 0, "y": 0 }, "workspace": { "x": 3, "y": 0, "w": 3 },
+        "decor": [{ "slot": "decor.plant", "x": 5, "y": 3 }],
+        "seats": {}
+    });
+    std::fs::write(dir.join("room.json"), serde_json::to_string_pretty(&room).map_err(err)?).map_err(err)?;
+    Ok(id)
 }
 
 /// Chi doi truong `workspace`, giu nguyen cac truong khac (ke ca truong nguoi dung tu them).
@@ -362,6 +408,34 @@ mod tests {
         assert!(root.join("themes/default/theme.json").exists());
         assert!(root.join("themes/default/desk.svg").exists());
         assert!(root.join("themes/README.md").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn load_creates_missing_department_json() {
+        let root = tmp("nodept");
+        fs::create_dir_all(root.join("departments/content-media")).unwrap();
+        let o = load_office(&root);
+        assert_eq!(o.len(), 1);
+        assert!(o[0].errors.is_empty(), "{:?}", o[0].errors);
+        assert_eq!(o[0].config.id, "content-media");
+        assert_eq!(o[0].config.name, "content-media");
+        assert!(root.join("departments/content-media/department.json").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn create_department_writes_files() {
+        let root = tmp("newdept");
+        let r = root.to_string_lossy().to_string();
+        let id = office_create_department(r.clone(), "Content Media!".into(), "🎬".into(), "Lam video".into()).unwrap();
+        assert_eq!(id, "content-media");
+        let d = load_office(&root).into_iter().find(|d| d.config.id == id).unwrap();
+        assert_eq!((d.config.name.as_str(), d.config.icon.as_str(), d.config.mission.as_str()), ("Content Media!", "🎬", "Lam video"));
+        assert!(d.errors.is_empty());
+        assert_eq!(d.room["workspace"]["w"], 3);
+        assert!(office_create_department(r.clone(), "content media".into(), "".into(), "".into()).is_err()); // trung
+        assert!(office_create_department(r, "!!!".into(), "".into(), "".into()).is_err()); // ten rong sau khi lam sach
         fs::remove_dir_all(&root).unwrap();
     }
 
