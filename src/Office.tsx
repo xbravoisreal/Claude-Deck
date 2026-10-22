@@ -8,7 +8,7 @@ export type Dept = { id: string; name: string; icon: string; mission: string; wo
 export type AgentLaunch = { label: string; args: string; settings: unknown };
 export type Task = {
   id: string; dept: string; agent: string; title: string; status: "backlog" | "running" | "waiting" | "review" | "done";
-  reason: string; session: string; dir: string; cwd: string; created: number; started: boolean; summary: string;
+  reason: string; session: string; dir: string; cwd: string; created: number; finished: number; started: boolean; summary: string;
 };
 
 /** Chu tren bong thoai theo trang thai task. */

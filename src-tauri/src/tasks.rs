@@ -31,6 +31,9 @@ pub struct Task {
     /// Muc cache_read luc sep cho chay tiep sau khi vuot tran; tran = maxTokens + cap_base.
     #[serde(default)]
     pub cap_base: u64,
+    /// Luc duyet hoac huy (millis), 0 = chua xong. Dung cho tab Lich su.
+    #[serde(default)]
+    pub finished: i64,
     #[serde(default, skip_deserializing)]
     pub summary: String,
 }
@@ -134,6 +137,7 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
         created: now.timestamp_millis(),
         started: false,
         cap_base: 0,
+        finished: 0,
         summary: String::new(),
     })
 }
@@ -177,6 +181,7 @@ pub fn cancel(t: &mut Task) -> Result<(), String> {
     }
     t.status = "done".into();
     t.reason = "da huy".into();
+    t.finished = chrono::Local::now().timestamp_millis();
     Ok(())
 }
 
@@ -196,6 +201,7 @@ pub fn approve(t: &mut Task) -> Result<(), String> {
         return Err("da xu ly roi".into());
     }
     t.status = "done".into();
+    t.finished = chrono::Local::now().timestamp_millis();
     Ok(())
 }
 
@@ -465,6 +471,7 @@ mod tests {
             created,
             started: false,
             cap_base: 0,
+            finished: 0,
             summary: String::new(),
         }
     }
@@ -612,6 +619,17 @@ mod tests {
         mark_idle(&mut t, true);
         assert_eq!(t.status, "review");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn approve_and_cancel_record_finish_time() {
+        let mut t = task("a", "dev", "review", 1);
+        assert_eq!(t.finished, 0);
+        approve(&mut t).unwrap();
+        assert!(t.finished > 1_700_000_000_000, "{}", t.finished);
+        let mut c = task("b", "dev", "waiting", 1);
+        cancel(&mut c).unwrap();
+        assert!(c.finished > 0);
     }
 
     #[test]
