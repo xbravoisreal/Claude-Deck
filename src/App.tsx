@@ -11,7 +11,7 @@ import Drawer from "./Drawer";
 /** task: id task Office gan voi tab (pane chat co dinh `${id}-chat-0`). */
 type Ws = { id: string; cwd: string; agent?: AgentLaunch; task?: string };
 type Started = { task: Task; label: string; args: string; settings: unknown };
-type Stats = { context: number; cache_read: number; max_tokens: number };
+type Stats = { context: number; cache_read: number; max_tokens: number; tool: string };
 type Chat = { n: number; args?: string };
 type Entry = { id: string; title: string; modified: number };
 type Prefs = { model: string; auto: boolean };
@@ -121,8 +121,9 @@ export default function App() {
   const [view, setView] = useState<"office" | "terminal">("office");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
-  const [drawer, setDrawer] = useState(false);
+  const [drawer, setDrawer] = useState<false | "pending" | "history">(false);
   const [ctx, setCtx] = useState<Record<string, number>>({});
+  const [tools, setTools] = useState<Record<string, string>>({});
   const [taskErr, setTaskErr] = useState("");
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -157,6 +158,7 @@ export default function App() {
         notes: (await s.get<string>("notesRoot")) ?? "",
         maxLive: (await s.get<number>("maxLive")) ?? OFFICE_DEFAULTS.maxLive,
         warnK: (await s.get<number>("warnK")) ?? OFFICE_DEFAULTS.warnK,
+        theme: (await s.get<string>("theme")) ?? OFFICE_DEFAULTS.theme,
       });
       setReady(true);
     });
@@ -164,7 +166,7 @@ export default function App() {
 
   useEffect(() => {
     if (!ready) return;
-    load("state.json").then((s) => (s.set("folders", tabs.filter((t) => !t.agent).map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes), s.set("maxLive", office.maxLive), s.set("warnK", office.warnK)));
+    load("state.json").then((s) => (s.set("folders", tabs.filter((t) => !t.agent).map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes), s.set("maxLive", office.maxLive), s.set("warnK", office.warnK), s.set("theme", office.theme)));
   }, [tabs, split, ratio, prefs, office, ready]);
 
   const root = () => officeRef.current.root;
@@ -259,6 +261,7 @@ export default function App() {
         const st = await invoke<Stats>("task_stats", { root: root(), id: ws.task }).catch(() => null);
         if (!st) continue;
         setCtx((c) => ({ ...c, [ws.task!]: st.context }));
+        setTools((m) => ({ ...m, [ws.task!]: st.tool }));
         const t = tasksRef.current.find((x) => x.id === ws.task);
         if (t?.status === "running" && st.cache_read > st.max_tokens) {
           invoke("pty_write", { id: `${ws.id}-chat-0`, data: "\x03" });
@@ -290,11 +293,17 @@ export default function App() {
     <div className="app">
       <div className={`tabs${split ? " split" : ""}`}>
         <div className="views">
-          <button className={`menu${drawer ? " on" : ""}`} title="Cho duyet" onClick={() => setDrawer(!drawer)}>
+          <button className={`menu${drawer ? " on" : ""}`} title="Cho duyet" onClick={() => setDrawer(drawer ? false : "pending")}>
             ☰{pending > 0 && <span className="badge">{pending}</span>}
           </button>
           <button className={view === "office" ? "on" : ""} onClick={() => setView("office")}>Office</button>
           <button className={view === "terminal" ? "on" : ""} onClick={() => setView("terminal")}>Terminal</button>
+          <span className="counts">
+            {(["review", "waiting", "running"] as const).map((st) => {
+              const n = tasks.filter((t) => t.status === st).length;
+              return n > 0 && <span key={st} className={`bubble ${st}`}>{n} {st === "review" ? "Chờ síp" : st === "waiting" ? "Chờ anh" : "Dang lam"}</span>;
+            })}
+          </span>
         </div>
         {tabs.map((t) => (
           <div key={t.id} className={`tab${t.id === active ? " on" : ""}${alerts.has(t.id) ? " alert" : ""}`} onClick={() => activate(t.id)} title={t.cwd}>
@@ -315,6 +324,8 @@ export default function App() {
           prefs={office}
           tasks={tasks}
           ctx={ctx}
+          tools={tools}
+          onHistory={() => setDrawer("history")}
           onOpen={openAgent}
           onTasks={startNext}
           onDepts={(ds: Dept[]) => setNames(Object.fromEntries(ds.flatMap((d) => d.agent_defs.map((a) => [`${d.id}/${a.id}`, `${a.name} · ${d.name}`]))))}
@@ -341,7 +352,7 @@ export default function App() {
           />
         ))}
       </div>
-      {drawer && <Drawer tasks={tasks} names={names} onApprove={approve} onRework={rework} onCancel={cancel} onOpen={openTask} onClose={() => setDrawer(false)} />}
+      {drawer && <Drawer key={drawer} initialTab={drawer} tasks={tasks} names={names} onApprove={approve} onRework={rework} onCancel={cancel} onOpen={openTask} onClose={() => setDrawer(false)} />}
       {settings && <Settings value={office} onSave={setOffice} onClose={() => setSettings(false)} />}
       <UsageFooter />
     </div>

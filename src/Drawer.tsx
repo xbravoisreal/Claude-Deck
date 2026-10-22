@@ -6,11 +6,11 @@ import { bubble, Task } from "./Office";
 const branch = (t: Task) => (/[\\/]\.office[\\/]worktrees[\\/]/.test(t.cwd) ? `office/${t.id}` : "");
 
 /** ☰: tab "Cho duyet" (Cho sip + Cho anh) va tab "Lich su" (task da duyet/huy). */
-export default function Drawer({ tasks, names, onApprove, onRework, onCancel, onOpen, onClose }: {
-  tasks: Task[]; names: Record<string, string>;
+export default function Drawer({ initialTab, tasks, names, onApprove, onRework, onCancel, onOpen, onClose }: {
+  initialTab: "pending" | "history"; tasks: Task[]; names: Record<string, string>;
   onApprove: (t: Task) => void; onRework: (t: Task, note: string) => void; onCancel: (t: Task) => void; onOpen: (t: Task) => void; onClose: () => void;
 }) {
-  const [tab, setTab] = useState<"pending" | "history">("pending");
+  const [tab, setTab] = useState(initialTab);
   const [note, setNote] = useState<{ id: string; text: string } | null>(null);
   const items = tasks.filter((t) => t.status === "review" || t.status === "waiting").sort((a, b) => b.created - a.created);
   const done = tasks.filter((t) => t.status === "done").sort((a, b) => (b.finished || b.created) - (a.finished || a.created));
