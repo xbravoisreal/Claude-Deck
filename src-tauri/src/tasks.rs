@@ -421,10 +421,15 @@ pub fn task_start_next(root: String, max_live: usize, notes_root: Option<String>
 /// Mo lai phien cua task da dong (Cho sip, app vua mo lai...): khong doi trang thai.
 /// Task chua tung chay duoc (khoi chay loi) -> chay moi tu dau.
 #[tauri::command]
-pub fn task_resume(root: String, id: String, notes_root: Option<String>) -> Result<Started, String> {
+pub fn task_resume(root: String, id: String, notes_root: Option<String>, prompt: Option<String>) -> Result<Started, String> {
     let depts = load_office(Path::new(&root));
     update_with(&root, &id, |t| {
         let mut s = start(&depts, t, t.started, notes_root.as_deref())?;
+        // Mo lai phien kem cau tra loi cua sep (tu Telegram). Prompt dung dau; "-..." se bi claude doc thanh option.
+        if let Some(p) = prompt.as_deref().map(str::trim).filter(|p| t.started && !p.is_empty()) {
+            let p = if p.starts_with('-') { format!("Sep: {p}") } else { p.to_string() };
+            s.args = format!("{} {}", ps_quote(&p), s.args);
+        }
         if !t.started {
             t.started = true;
             t.status = "running".into();
@@ -677,10 +682,13 @@ mod tests {
         office_set_workspace(r.clone(), "software-dev".into(), d.config.workspace.clone()).unwrap();
         let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "".into(), None).unwrap();
         task_stop_any(&r, &t.id); // gia lap khoi chay loi: waiting, started=false
-        let s = task_resume(r.clone(), t.id.clone(), None).unwrap();
-        assert!(s.args.contains("--session-id") && !s.args.contains("--resume"), "{}", s.args);
+        let s = task_resume(r.clone(), t.id.clone(), None, Some("bo qua".into())).unwrap();
+        assert!(s.args.contains("--session-id") && !s.args.contains("bo qua"), "{}", s.args); // chua chay: prompt goc, bo cau tra loi
         let t = load_tasks(Path::new(&r)).unwrap().into_iter().next().unwrap();
         assert!(t.started && t.status == "running");
+        // Da chay: mo lai phien, cau tra loi dung dau (truoc option nhieu gia tri)
+        let s = task_resume(r.clone(), t.id.clone(), None, Some("-commit readme".into())).unwrap();
+        assert!(s.args.starts_with(&format!("'Sep: -commit readme' --resume {}", t.session)), "{}", s.args);
         let _ = fs::remove_dir_all(&root);
     }
 

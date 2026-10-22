@@ -281,8 +281,8 @@ export default function App() {
 
   // Bot Telegram: cau hinh lai khi doi chat id / thu muc office. Token doc tu Credential Manager ben Rust.
   useEffect(() => {
-    if (ready) invoke("tg_config", { chatId: office.tgChat, root: office.root });
-  }, [ready, office.tgChat, office.root]);
+    if (ready) invoke("tg_config", { chatId: office.tgChat, root: office.root, notes: office.notes });
+  }, [ready, office.tgChat, office.root, office.notes]);
 
   // Su kien tu bot: duyet/lam lai tren dien thoai, cho phep/tu choi lenh.
   useEffect(() => {
@@ -300,6 +300,26 @@ export default function App() {
         invoke("pty_write", { id: `${ws.id}-chat-0`, data: e.payload.allow ? "1" : "\x1b" });
         unsent(e.payload.task);
         invoke("task_busy", { root: root(), id: e.payload.task }).then(refresh, fail);
+      }),
+      // Sep reply tin "Cho sip tra loi" tren Telegram: go vao phien dang mo, hoac mo lai phien kem cau tra loi.
+      listen<{ task: string; text: string }>("office-reply", async (e) => {
+        const { task, text } = e.payload;
+        const ws = tabsRef.current.find((w) => w.task === task);
+        unsent(task);
+        try {
+          if (ws) {
+            const id = `${ws.id}-chat-0`;
+            // Xuong dong se gui tung dong; Enter gui rieng de TUI khong coi la mot phan cua doan dan.
+            await invoke("pty_write", { id, data: text.replace(/\s*\n\s*/g, " ") });
+            setTimeout(() => invoke("pty_write", { id, data: "\r" }), 150);
+          } else {
+            addTab(tabFor(await invoke<Started>("task_resume", { root: root(), id: task, notesRoot: notesRoot(), prompt: text })), false);
+          }
+          await invoke("task_busy", { root: root(), id: task });
+        } catch (err) {
+          fail(err);
+        }
+        refresh();
       }),
     ];
     return () => offs.forEach((p) => p.then((off) => off()));

@@ -15,13 +15,20 @@ pub enum Action {
     ReworkNote(String, String),
     Allow(String),
     Deny(String),
+    /// Tra loi (reply) vao tin co message_id nay.
+    Reply(i64, String),
+    /// Tin thuong: viec moi, cho chon agent.
+    NewTask(String),
+    /// (phong, agent, noi dung) sau khi bam nut chon agent.
+    Assign(String, String, String),
     Ignore,
 }
 
-/// Trang thai hoi thoai: dang cho nhan xet lam lai cho task nao.
+/// Trang thai hoi thoai: dang cho nhan xet lam lai cho task nao; viec moi dang cho chon agent.
 #[derive(Default)]
 pub struct Chat {
     pub pending_rework: Option<String>,
+    pub pending_task: Option<String>,
 }
 
 /// Thoat ky tu cho parse_mode HTML cua Telegram.
@@ -58,6 +65,10 @@ pub fn parse_update(u: &Value, chat_id: i64, st: &mut Chat) -> (Action, Option<S
             }
             "al" => Action::Allow(id),
             "de" => Action::Deny(id),
+            "as" => match (id.split_once('/'), st.pending_task.take()) {
+                (Some((dept, agent)), Some(text)) => Action::Assign(dept.into(), agent.into(), text),
+                _ => Action::Ignore,
+            },
             _ => Action::Ignore,
         };
         return (a, qid);
@@ -66,10 +77,16 @@ pub fn parse_update(u: &Value, chat_id: i64, st: &mut Chat) -> (Action, Option<S
     if m["chat"]["id"].as_i64() != Some(chat_id) || !sender_ok(m) {
         return (Action::Ignore, None);
     }
-    match (m["text"].as_str().map(str::trim).filter(|t| !t.is_empty()), &st.pending_rework) {
-        (Some(text), Some(_)) => (Action::ReworkNote(st.pending_rework.take().unwrap(), text.into()), None),
-        _ => (Action::Ignore, None),
-    }
+    let Some(text) = m["text"].as_str().map(str::trim).filter(|t| !t.is_empty() && !t.starts_with('/')) else { return (Action::Ignore, None) };
+    let a = if let Some(to) = m["reply_to_message"]["message_id"].as_i64() {
+        Action::Reply(to, text.into())
+    } else if let Some(id) = st.pending_rework.take() {
+        Action::ReworkNote(id, text.into())
+    } else {
+        st.pending_task = Some(text.into());
+        Action::NewTask(text.into())
+    };
+    (a, None)
 }
 
 fn buttons(rows: &[(&str, String)]) -> Value {
@@ -92,6 +109,10 @@ pub fn waiting_message(agent: &str, dept: &str, t: &Task, permission: bool) -> (
     }
     if !t.ask.is_empty() {
         text += &format!("\n💬 {}", escape(&clip(&t.ask, 800)));
+    }
+    if !permission {
+        text += "
+↩ Trả lời (reply) tin này để nhắn agent.";
     }
     let kb = if permission { buttons(&[("✅ Cho phép", format!("al:{}", t.id)), ("⛔ Từ chối", format!("de:{}", t.id))]) } else { Value::Null };
     (text, kb)
@@ -116,6 +137,7 @@ struct Cfg {
     token: String,
     chat: i64,
     root: String,
+    notes: String,
 }
 
 static CFG: Mutex<Option<Cfg>> = Mutex::new(None);
@@ -181,7 +203,16 @@ fn find(root: &str, id: &str) -> Option<Task> {
 
 /// Xu ly mot update da qua kiem tra chat id.
 fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
-    let (action, qid) = parse_update(u, c.chat, chat);
+    let (mut action, qid) = parse_update(u, c.chat, chat);
+    let waiting_by_msg = |to: i64| tasks::load_tasks(Path::new(&c.root)).ok()?.into_iter().find(|t| to != 0 && t.tg_msg == to && t.status == "waiting");
+    // Reply khong vao tin cho tra loi nao ma dang cho nhan xet lam lai (vd reply vao cau hoi "Nhan xet...?") -> nhan xet.
+    if let Action::Reply(to, text) = &action {
+        if waiting_by_msg(*to).is_none() {
+            if let Some(id) = chat.pending_rework.take() {
+                action = Action::ReworkNote(id, text.clone());
+            }
+        }
+    }
     let cb_msg = u["callback_query"]["message"]["message_id"].as_i64().unwrap_or(0);
     let changed = || {
         let _ = app.emit("office-tasks-changed", ());
@@ -228,6 +259,53 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
             edit(c, cb_msg, &format!("{} · task {}", if allow { "✅ Đã cho phép" } else { "⛔ Đã từ chối" }, escape(&id)));
         }
         Action::Allow(_) | Action::Deny(_) => answer(c, &qid, "Đã xử lý rồi"),
+        Action::Reply(to, text) => match waiting_by_msg(to) {
+            Some(t) if t.reason.starts_with("xin quyen") => {
+                let _ = send(c, "Đang xin quyền: bấm nút ✅ Cho phép / ⛔ Từ chối.", &Value::Null);
+            }
+            Some(t) => {
+                let _ = tasks::update(&c.root, &t.id, |t| Ok(t.tg_msg = 0));
+                edit(c, to, &format!("💬 Đã trả lời · <b>{}</b>
+{}", escape(&t.title), escape(&clip(&text, 300))));
+                let _ = app.emit("office-reply", json!({ "task": t.id, "text": text }));
+            }
+            None => {
+                let _ = send(c, "Tin này không còn chờ trả lời.", &Value::Null);
+            }
+        },
+        Action::NewTask(text) => {
+            // Moi agent cua phong da co thu muc du an thanh mot nut "as:<phong>/<agent>" (callback_data toi da 64 byte).
+            let rows: Vec<Value> = load_office(Path::new(&c.root))
+                .iter()
+                .filter(|d| !d.config.workspace.is_empty())
+                .flat_map(|d| d.agent_defs.iter().map(move |a| (format!("{} · {}", a.name, d.config.name), format!("as:{}/{}", d.config.id, a.id))))
+                .filter(|(_, data)| data.len() <= 64)
+                .map(|(label, data)| json!([{ "text": label, "callback_data": data }]))
+                .collect();
+            if rows.is_empty() {
+                chat.pending_task = None;
+                let _ = send(c, "Chưa có phòng nào có thư mục dự án để giao việc.", &Value::Null);
+            } else {
+                let _ = send(c, &format!("📌 Giao cho ai?
+{}", escape(&clip(&text, 300))), &json!({ "inline_keyboard": rows }));
+            }
+        }
+        Action::Assign(dept, agent, text) => {
+            let title = clip(text.lines().next().unwrap_or(""), 80);
+            match tasks::task_create(c.root.clone(), dept, agent, title, text, Some(c.notes.clone())) {
+                Ok(t) => {
+                    answer(c, &qid, "Đã giao");
+                    let (agent, dept) = names(&c.root, &t);
+                    edit(c, cb_msg, &format!("📌 Đã giao cho <b>{}</b> · {}
+Task: {}", escape(&agent), escape(&dept), escape(&t.title)));
+                    changed();
+                }
+                Err(e) => {
+                    answer(c, &qid, "");
+                    edit(c, cb_msg, &format!("Không giao được: {}", escape(&e)));
+                }
+            }
+        }
         Action::Ignore => answer(c, &qid, ""),
     }
 }
@@ -316,10 +394,10 @@ pub fn tg_status() -> String {
 
 /// Cau hinh lai va (khoi) chay vong polling. Thieu token hoac chat id -> tat bot.
 #[tauri::command]
-pub fn tg_config(app: AppHandle, chat_id: String, root: String) {
+pub fn tg_config(app: AppHandle, chat_id: String, root: String, notes: String) {
     let gen = GEN.fetch_add(1, Ordering::SeqCst) + 1;
     let c = match (token(), chat_id.trim().parse::<i64>()) {
-        (Some(token), Ok(chat)) => Cfg { token, chat, root },
+        (Some(token), Ok(chat)) => Cfg { token, chat, root, notes },
         (None, _) => return (*CFG.lock().unwrap_or_else(|e| e.into_inner()) = None, set_status("tat (chua co token)")).0,
         (_, Err(_)) => return (*CFG.lock().unwrap_or_else(|e| e.into_inner()) = None, set_status("tat (chua co chat id)")).0,
     };
@@ -331,7 +409,7 @@ pub fn tg_config(app: AppHandle, chat_id: String, root: String) {
 #[tauri::command]
 pub async fn tg_test(chat_id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let c = Cfg { token: token().ok_or("chua luu token")?, chat: chat_id.trim().parse().map_err(|_| "chat id phai la so")?, root: String::new() };
+        let c = Cfg { token: token().ok_or("chua luu token")?, chat: chat_id.trim().parse().map_err(|_| "chat id phai la so")?, root: String::new(), notes: String::new() };
         send(&c, "✅ ClaudeDeck đã kết nối", &Value::Null).map(|_| ())
     })
     .await
@@ -371,7 +449,8 @@ pub fn tg_notify(id: String, kind: String) {
             _ => return,
         };
         match send(&c, &text, &kb) {
-            Ok(msg) if !kb.is_null() => {
+            // Tin co nut hoac cho tra loi: nho message_id de bo nut / nhan reply.
+            Ok(msg) if matches!(kind.as_str(), "review" | "waiting" | "permission") => {
                 let _ = tasks::update(&c.root, &id, |t| Ok(t.tg_msg = msg));
             }
             Ok(_) => {}
@@ -469,12 +548,32 @@ mod tests {
 
     #[test]
     fn rework_waits_for_text() {
-        let mut st = Chat { pending_rework: Some("t1".into()) };
+        let mut st = Chat { pending_rework: Some("t1".into()), ..Default::default() };
         assert_eq!(parse_update(&msg(ME, None), ME, &mut st).0, Action::Ignore); // anh/sticker
         assert_eq!(parse_update(&msg(ME, Some("   ")), ME, &mut st).0, Action::Ignore);
         assert_eq!(parse_update(&msg(ME, Some("them test")), ME, &mut st).0, Action::ReworkNote("t1".into(), "them test".into()));
         assert!(st.pending_rework.is_none());
-        assert_eq!(parse_update(&msg(ME, Some("chao")), ME, &mut st).0, Action::Ignore); // khong con cho nhan xet
+        // het cho nhan xet: tin thuong = giao task moi
+        assert_eq!(parse_update(&msg(ME, Some("chao")), ME, &mut st).0, Action::NewTask("chao".into()));
+    }
+
+    #[test]
+    fn reply_answers_the_message_it_quotes() {
+        let mut st = Chat { pending_rework: Some("t1".into()), ..Default::default() };
+        let mut u = msg(ME, Some("commit readme"));
+        u["message"]["reply_to_message"] = json!({ "message_id": 5 });
+        assert_eq!(parse_update(&u, ME, &mut st).0, Action::Reply(5, "commit readme".into()));
+        assert_eq!(st.pending_rework.as_deref(), Some("t1")); // handle quyet dinh: tin 5 khong phai task cho -> nhan xet lam lai
+    }
+
+    #[test]
+    fn plain_text_then_agent_button_assigns_task() {
+        let mut st = Chat::default();
+        assert_eq!(parse_update(&msg(ME, Some("/start")), ME, &mut st).0, Action::Ignore);
+        assert_eq!(parse_update(&msg(ME, Some("sua readme")), ME, &mut st).0, Action::NewTask("sua readme".into()));
+        assert_eq!(parse_update(&cb(ME, "as:software-dev/dev"), ME, &mut st).0, Action::Assign("software-dev".into(), "dev".into(), "sua readme".into()));
+        assert_eq!(parse_update(&cb(ME, "as:software-dev/dev"), ME, &mut st).0, Action::Ignore); // da giao, bam lai khong tao trung
+        assert_eq!(parse_update(&cb(999, "as:software-dev/dev"), ME, &mut st).0, Action::Ignore);
     }
 
     #[test]

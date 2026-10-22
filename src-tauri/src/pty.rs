@@ -61,8 +61,16 @@ fn hook_cmd(port: u16, id: &str, kind: &str) -> String {
 }
 
 /// Chuoi nhay don cua PowerShell: `'` trong chuoi viet thanh `''`.
+/// PowerShell coi ca ‘ ’ ‚ ‛ la nhay don nen cung viet doi (dien thoai hay tu doi ' thanh ’).
 pub fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    let mut out = String::from("'");
+    for c in s.chars() {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            out.push(c);
+        }
+        out.push(c);
+    }
+    out + "'"
 }
 
 /// kind = "chat": chay `claude` trong PowerShell. kind = "shell": PowerShell thuong.
@@ -227,6 +235,12 @@ mod tests {
         let req = format!("POST /a/stop HTTP/1.1\r\n\r\n{body}");
         assert_eq!(parse_signal(&req).unwrap().2, "Da, em bo qua.");
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn ps_quote_doubles_smart_quotes() {
+        // PowerShell coi ' ‘ ’ ‚ ‛ deu la nhay don; dien thoai hay tu doi ' thanh ’.
+        assert_eq!(ps_quote("it’s ‘x’ 'y'"), "'it’’s ‘‘x’’ ''y'''");
     }
 
     #[test]
