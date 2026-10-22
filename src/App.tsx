@@ -365,7 +365,7 @@ export default function App() {
           <span className="counts">
             {(["review", "waiting", "running"] as const).map((st) => {
               const n = tasks.filter((t) => t.status === st).length;
-              return n > 0 && <span key={st} className={`bubble ${st}`}>{n} {st === "review" ? "Chờ síp" : st === "waiting" ? "Chờ anh" : "Dang lam"}</span>;
+              return n > 0 && <span key={st} className={`bubble ${st}`}>{n} {st === "review" ? "Chờ síp duyệt" : st === "waiting" ? "Chờ síp trả lời" : "Dang lam"}</span>;
             })}
           </span>
         </div>

@@ -19,8 +19,8 @@ export type Task = {
 
 /** Chu tren bong thoai theo trang thai task (tool: ten tool dang chay, neu biet). */
 export const bubble = (t: Task, tool?: string) =>
-  t.status === "review" ? "Chờ síp"
-  : t.status === "waiting" ? `Chờ anh${t.reason ? `: ${t.reason}` : ""}`
+  t.status === "review" ? "Chờ síp duyệt"
+  : t.status === "waiting" ? `Chờ síp trả lời${t.reason ? `: ${t.reason}` : ""}`
   : t.status === "running" ? (tool ? `Dang: ${tool}` : `Dang: ${t.title}`)
   : "";
 

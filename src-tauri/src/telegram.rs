@@ -77,7 +77,7 @@ fn buttons(rows: &[(&str, String)]) -> Value {
 }
 
 pub fn review_message(agent: &str, dept: &str, t: &Task) -> (String, Value) {
-    let mut text = format!("🟠 <b>Chờ síp</b> · <b>{}</b> · {}\nTask: {}", escape(agent), escape(dept), escape(&clip(&t.title, 120)));
+    let mut text = format!("🟠 <b>Chờ síp duyệt</b> · <b>{}</b> · {}\nTask: {}", escape(agent), escape(dept), escape(&clip(&t.title, 120)));
     if !t.summary.is_empty() {
         text += &format!("\nTóm tắt: {}", escape(&clip(&t.summary, 300)));
     }
@@ -86,7 +86,7 @@ pub fn review_message(agent: &str, dept: &str, t: &Task) -> (String, Value) {
 
 /// Cho anh: chi xin quyen moi co nut Cho phep / Tu choi.
 pub fn waiting_message(agent: &str, dept: &str, t: &Task, permission: bool) -> (String, Value) {
-    let mut text = format!("🟡 <b>Chờ anh</b> · <b>{}</b> · {}\nTask: {}", escape(agent), escape(dept), escape(&clip(&t.title, 120)));
+    let mut text = format!("🟡 <b>Chờ síp trả lời</b> · <b>{}</b> · {}\nTask: {}", escape(agent), escape(dept), escape(&clip(&t.title, 120)));
     if !t.reason.is_empty() {
         text += &format!("\nLý do: {}", escape(&clip(&t.reason, 200)));
     }
@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn review_message_escapes_html() {
         let (text, kb) = review_message("Dev", "Software Dev", &task("a < b && c > d"));
-        assert!(text.contains("Chờ síp") && text.contains("<b>Dev</b>") && text.contains("Software Dev"), "{text}");
+        assert!(text.contains("Chờ síp duyệt") && text.contains("<b>Dev</b>") && text.contains("Software Dev"), "{text}");
         assert!(text.contains("Sua &lt;nut&gt; &amp; menu") && text.contains("a &lt; b &amp;&amp; c &gt; d"), "{text}");
         assert_eq!(kb["inline_keyboard"][0][0]["callback_data"], "ok:t1");
         assert_eq!(kb["inline_keyboard"][0][1]["callback_data"], "re:t1");
@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn waiting_message_buttons_only_for_permission() {
         let (text, kb) = waiting_message("Dev", "D", &task(""), true);
-        assert!(text.contains("Chờ anh") && text.contains("xin quyen: Bash"), "{text}");
+        assert!(text.contains("Chờ síp trả lời") && text.contains("xin quyen: Bash"), "{text}");
         assert_eq!(kb["inline_keyboard"][0][0]["callback_data"], "al:t1");
         assert_eq!(kb["inline_keyboard"][0][1]["callback_data"], "de:t1");
         let (_, kb) = waiting_message("Dev", "D", &task(""), false);
