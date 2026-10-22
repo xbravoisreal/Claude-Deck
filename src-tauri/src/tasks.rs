@@ -37,6 +37,9 @@ pub struct Task {
     /// message_id tin Telegram con nut bam cua task (0 = khong co).
     #[serde(default)]
     pub tg_msg: i64,
+    /// Cau cuoi agent noi truoc khi dung cho sep tra loi (rong khi khong cho).
+    #[serde(default)]
+    pub ask: String,
     #[serde(default, skip_deserializing)]
     pub summary: String,
 }
@@ -142,6 +145,7 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
         cap_base: 0,
         finished: 0,
         tg_msg: 0,
+        ask: String::new(),
         summary: String::new(),
     })
 }
@@ -171,10 +175,16 @@ pub fn schedule(tasks: &[Task], max_live: usize) -> Vec<String> {
 
 /// Phien ranh. stop = hook Stop (het luot): co result.md -> Cho sip, khong -> dang hoi sep.
 /// Hook Notification (xin quyen / ranh lau) giua luot -> chi waiting, khong bao gio Cho sip (tranh dong PTY khi Agent con lam).
-pub fn mark_idle(t: &mut Task, stop: bool) {
+pub fn mark_idle(t: &mut Task, stop: bool, ask: &str) {
     if live(t) {
         t.status = if stop && Path::new(&t.dir).join("result.md").exists() { "review" } else { "waiting" }.into();
         t.reason.clear();
+        // Chi Stop mang cau cuoi cua agent; Notification ("waiting for your input"...) giu cau cu.
+        if t.status != "waiting" {
+            t.ask.clear();
+        } else if stop {
+            t.ask = ask.chars().take(1000).collect();
+        }
     }
 }
 
@@ -197,6 +207,7 @@ pub fn resume_busy(t: &mut Task, cache_read: u64) {
         }
         t.status = "running".into();
         t.reason.clear();
+        t.ask.clear();
     }
 }
 
@@ -265,8 +276,8 @@ pub fn task_create(root: String, dept: String, agent: String, title: String, bod
 }
 
 #[tauri::command]
-pub fn task_idle(root: String, id: String, stop: bool) -> Result<Task, String> {
-    update(&root, &id, |t| Ok(mark_idle(t, stop)))
+pub fn task_idle(root: String, id: String, stop: bool, message: String) -> Result<Task, String> {
+    update(&root, &id, |t| Ok(mark_idle(t, stop, &message)))
 }
 
 #[tauri::command]
@@ -487,6 +498,7 @@ mod tests {
             cap_base: 0,
             finished: 0,
             tg_msg: 0,
+            ask: String::new(),
             summary: String::new(),
         }
     }
@@ -559,13 +571,15 @@ mod tests {
         let root = tmp("idle");
         let mut t = task("a", "dev", "running", 1);
         t.dir = root.to_string_lossy().into_owned();
-        mark_idle(&mut t, true);
-        assert_eq!(t.status, "waiting");
+        mark_idle(&mut t, true, "Sep muon commit gi?");
+        assert_eq!((t.status.as_str(), t.ask.as_str()), ("waiting", "Sep muon commit gi?"));
+        mark_idle(&mut t, false, "Claude is waiting for your input"); // thong bao chung khong de cau hoi that
+        assert_eq!(t.ask, "Sep muon commit gi?");
         fs::write(root.join("result.md"), "xong").unwrap();
-        mark_idle(&mut t, true);
+        mark_idle(&mut t, true, "");
         assert_eq!(t.status, "review");
         t.status = "done".into();
-        mark_idle(&mut t, true); // tin hieu tre khong keo task da duyet ve
+        mark_idle(&mut t, true, ""); // tin hieu tre khong keo task da duyet ve
         assert_eq!(t.status, "done");
         let _ = fs::remove_dir_all(&root);
     }
@@ -596,7 +610,7 @@ mod tests {
         assert!(!root.join("result.md").exists());
         assert!(root.join("result.prev.md").exists());
         t.status = "running".into();
-        mark_idle(&mut t, true);
+        mark_idle(&mut t, true, "");
         assert_eq!(t.status, "waiting");
         assert!(rework(&mut t, "x").is_err());
         let _ = fs::remove_dir_all(&root);
@@ -629,9 +643,9 @@ mod tests {
         fs::write(root.join("result.md"), "xong").unwrap();
         let mut t = task("a", "dev", "running", 1);
         t.dir = root.to_string_lossy().into_owned();
-        mark_idle(&mut t, false); // xin quyen giua chung, result.md co tu truoc
+        mark_idle(&mut t, false, ""); // xin quyen giua chung, result.md co tu truoc
         assert_eq!(t.status, "waiting");
-        mark_idle(&mut t, true);
+        mark_idle(&mut t, true, "");
         assert_eq!(t.status, "review");
         let _ = fs::remove_dir_all(&root);
     }

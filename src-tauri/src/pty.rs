@@ -152,12 +152,28 @@ pub fn pty_resize(state: State<Sessions>, id: String, cols: u16, rows: u16) -> R
 }
 
 /// "<METHOD> /<id>[/<kind>] HTTP/1.1 ... \r\n\r\n<json hook>" -> (id, kind, message). Khong co kind = stop.
+/// message: Notification co san; Stop thi lay cau tra loi cuoi cua agent trong transcript.
 pub fn parse_signal(req: &str) -> Option<(String, String, String)> {
     let path = req.lines().next()?.split_whitespace().nth(1)?.trim_start_matches('/');
     let (id, kind) = path.split_once('/').unwrap_or((path, "stop"));
     let body = req.split_once("\r\n\r\n").map_or("", |(_, b)| b);
-    let msg = serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| v["message"].as_str().map(String::from)).unwrap_or_default();
+    let v = serde_json::from_str::<serde_json::Value>(body).unwrap_or_default();
+    let msg = v["message"].as_str().map(String::from).or_else(|| v["transcript_path"].as_str().map(last_reply)).unwrap_or_default();
     Some((id.into(), kind.into(), msg))
+}
+
+/// Chu cua tin assistant cuoi cung trong transcript JSONL (rong neu khong doc duoc).
+fn last_reply(path: &str) -> String {
+    let Ok(s) = std::fs::read_to_string(path) else { return String::new() };
+    s.lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find_map(|v| {
+            let text = (v["message"]["role"] == "assistant").then(|| v["message"]["content"].as_array()).flatten()?
+                .iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+            (!text.trim().is_empty()).then(|| text.trim().to_string())
+        })
+        .unwrap_or_default()
 }
 
 /// Doc tron mot request (header + than theo Content-Length), toi da 64KB, tong cong toi da 2s
@@ -200,6 +216,17 @@ mod tests {
         assert_eq!(parse_signal("GET /abc/stop HTTP/1.1\r\n\r\n"), Some(("abc".into(), "stop".into(), String::new())));
         assert_eq!(parse_signal("GET /abc HTTP/1.1\r\n\r\n"), Some(("abc".into(), "stop".into(), String::new())));
         assert_eq!(parse_signal("rac"), None);
+    }
+
+    #[test]
+    fn stop_reads_last_reply_from_transcript() {
+        let p = std::env::temp_dir().join("claudedeck-test-transcript.jsonl");
+        let line = |role: &str, text: &str| serde_json::json!({ "message": { "role": role, "content": [{ "type": "text", "text": text }] } }).to_string();
+        std::fs::write(&p, [line("assistant", "cu"), line("user", "bo qua"), line("assistant", "Da, em bo qua."), r#"{"type":"system"}"#.into()].join("\n")).unwrap();
+        let body = serde_json::json!({ "hook_event_name": "Stop", "transcript_path": p }).to_string();
+        let req = format!("POST /a/stop HTTP/1.1\r\n\r\n{body}");
+        assert_eq!(parse_signal(&req).unwrap().2, "Da, em bo qua.");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

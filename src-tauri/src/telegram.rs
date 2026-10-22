@@ -90,6 +90,9 @@ pub fn waiting_message(agent: &str, dept: &str, t: &Task, permission: bool) -> (
     if !t.reason.is_empty() {
         text += &format!("\nLý do: {}", escape(&clip(&t.reason, 200)));
     }
+    if !t.ask.is_empty() {
+        text += &format!("\n💬 {}", escape(&clip(&t.ask, 800)));
+    }
     let kb = if permission { buttons(&[("✅ Cho phép", format!("al:{}", t.id)), ("⛔ Từ chối", format!("de:{}", t.id))]) } else { Value::Null };
     (text, kb)
 }
@@ -496,7 +499,10 @@ mod tests {
         assert!(text.contains("Chờ síp trả lời") && text.contains("xin quyen: Bash"), "{text}");
         assert_eq!(kb["inline_keyboard"][0][0]["callback_data"], "al:t1");
         assert_eq!(kb["inline_keyboard"][0][1]["callback_data"], "de:t1");
-        let (_, kb) = waiting_message("Dev", "D", &task(""), false);
+        let mut t = task("");
+        t.ask = "Sep muon commit <gi>?".into();
+        let (text, kb) = waiting_message("Dev", "D", &t, false);
         assert!(kb.is_null());
+        assert!(text.contains("Sep muon commit &lt;gi&gt;?"), "{text}");
     }
 }

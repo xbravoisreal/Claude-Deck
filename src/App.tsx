@@ -237,7 +237,7 @@ export default function App() {
     if (!ws.task) return;
     const id = ws.task;
     const was = tasksRef.current.find((t) => t.id === id)?.status;
-    invoke<Task>("task_idle", { root: root(), id, stop }).then(async (t) => {
+    invoke<Task>("task_idle", { root: root(), id, stop, message }).then(async (t) => {
       // Vua chuyen sang Cho sip: dong PTY giai phong cho (mo lai bang --resume). Tab mo lai tu ☰ thi giu.
       if (t.status === "review" && was !== "review") {
         closeTaskTab(id);

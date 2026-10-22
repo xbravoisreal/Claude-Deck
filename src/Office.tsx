@@ -14,7 +14,7 @@ export type Dept = {
 export type AgentLaunch = { label: string; args: string; settings: unknown };
 export type Task = {
   id: string; dept: string; agent: string; title: string; status: "backlog" | "running" | "waiting" | "review" | "done";
-  reason: string; session: string; dir: string; cwd: string; created: number; finished: number; started: boolean; summary: string;
+  reason: string; session: string; dir: string; cwd: string; created: number; finished: number; started: boolean; summary: string; ask: string;
 };
 
 /** Chu tren bong thoai theo trang thai task (tool: ten tool dang chay, neu biet). */
