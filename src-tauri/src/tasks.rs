@@ -101,6 +101,9 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
     if !d.agent_defs.iter().any(|a| a.id == agent) {
         return Err(format!("khong co agent {agent}"));
     }
+    if crate::office::agent_status(&d.config, agent) == "retired" {
+        return Err(format!("{agent} da nghi viec"));
+    }
     let base = match notes.filter(|n| !n.is_empty()) {
         Some(n) => Path::new(n).join("ClaudeDeck").join(&d.config.id),
         None => ws.join(".office").join("tasks"),
@@ -448,7 +451,8 @@ pub fn task_stats(root: String, id: String) -> Result<Stats, String> {
         None => Stats::default(),
     };
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == t.dept);
-    st.max_tokens = d.and_then(|d| d.config.defaults["maxTokens"].as_u64()).unwrap_or(4_000_000) + t.cap_base;
+    let cap = d.and_then(|d| d.config.budget.get(&t.agent).copied().or(d.config.defaults["maxTokens"].as_u64()));
+    st.max_tokens = cap.unwrap_or(4_000_000) + t.cap_base;
     Ok(st)
 }
 
@@ -506,6 +510,74 @@ mod tests {
             ask: String::new(),
             summary: String::new(),
         }
+    }
+
+    /// Doi status/budget cua agent trong department.json phong software-dev.
+    fn set_dept(office: &Path, f: impl FnOnce(&mut serde_json::Value)) {
+        crate::office::edit_department(office, "software-dev", |v| Ok(f(v))).unwrap();
+    }
+
+    #[test]
+    fn create_task_rejects_retired_agent() {
+        let (root, _ws, _) = setup("retired-create", false);
+        let office = root.join("office");
+        set_dept(&office, |v| v["status"]["qa"] = "retired".into());
+        let d = load_office(&office).into_iter().find(|d| d.config.id == "software-dev").unwrap();
+        let mut d = d;
+        d.config.workspace = root.join("ws").to_string_lossy().into_owned();
+        assert!(create_task(&d, "qa", "x", "", None).unwrap_err().contains("da nghi"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn set_status_retire_refuses_with_open_tasks() {
+        let (root, _ws, _) = setup("retire-open", false);
+        let office = root.join("office");
+        let r = office.to_string_lossy().to_string();
+        let mut t = task("a", "qa", "backlog", 1);
+        t.dept = "software-dev".into();
+        with_tasks(&office, |ts| Ok(ts.push(t))).unwrap();
+        let e = crate::office::office_set_agent_status(r.clone(), "software-dev".into(), "qa".into(), "retired".into()).unwrap_err();
+        assert!(e.contains("con task"), "{e}");
+        update(&r, "a", |t| Ok(t.status = "done".into())).unwrap();
+        crate::office::office_set_agent_status(r.clone(), "software-dev".into(), "qa".into(), "retired".into()).unwrap();
+        let d = load_office(&office).into_iter().find(|d| d.config.id == "software-dev").unwrap();
+        assert_eq!(crate::office::agent_status(&d.config, "qa"), "retired");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn set_status_active_clears_budget_and_rejects_unknown() {
+        let (root, _ws, _) = setup("status-active", false);
+        let office = root.join("office");
+        let r = office.to_string_lossy().to_string();
+        set_dept(&office, |v| {
+            v["status"]["qa"] = "probation".into();
+            v["budget"] = serde_json::json!({ "qa": 1000000 });
+        });
+        crate::office::office_set_agent_status(r.clone(), "software-dev".into(), "qa".into(), "active".into()).unwrap();
+        let d = load_office(&office).into_iter().find(|d| d.config.id == "software-dev").unwrap();
+        assert_eq!(crate::office::agent_status(&d.config, "qa"), "active");
+        assert!(!d.config.budget.contains_key("qa"));
+        assert!(crate::office::office_set_agent_status(r, "software-dev".into(), "qa".into(), "boss".into()).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn task_stats_uses_agent_budget() {
+        let (root, _ws, _) = setup("budget", false);
+        let office = root.join("office");
+        let r = office.to_string_lossy().to_string();
+        set_dept(&office, |v| v["budget"] = serde_json::json!({ "dev": 1000000 }));
+        for (id, agent) in [("a", "dev"), ("b", "qa")] {
+            let mut t = task(id, agent, "running", 1);
+            t.dept = "software-dev".into();
+            t.cap_base = 5;
+            with_tasks(&office, |ts| Ok(ts.push(t))).unwrap();
+        }
+        assert_eq!(task_stats(r.clone(), "a".into()).unwrap().max_tokens, 1_000_005);
+        assert_eq!(task_stats(r, "b".into()).unwrap().max_tokens, 4_000_005);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

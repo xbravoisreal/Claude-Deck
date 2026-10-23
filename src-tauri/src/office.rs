@@ -26,6 +26,9 @@ pub struct DeptConfig {
     /// agent id -> active | probation | retired
     #[serde(default)]
     pub status: HashMap<String, String>,
+    /// agent id -> tran token doc cache rieng (Agent thu viec); thieu -> defaults.maxTokens.
+    #[serde(default)]
+    pub budget: HashMap<String, u64>,
     /// vd {"maxTokens": 4000000}
     #[serde(default)]
     pub defaults: serde_json::Value,
@@ -113,6 +116,11 @@ pub fn load_office(root: &Path) -> Vec<Department> {
     out
 }
 
+/// active | probation | retired (thieu = active).
+pub fn agent_status<'a>(c: &'a DeptConfig, id: &str) -> &'a str {
+    c.status.get(id).map_or("active", String::as_str)
+}
+
 /// Ten plugin tam; agent trong phien la `office:<id>`.
 const PLUGIN: &str = "office";
 
@@ -123,7 +131,8 @@ pub fn write_plugin(d: &Department, dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir.join(".claude-plugin"))?;
     std::fs::create_dir_all(dir.join("agents"))?;
     std::fs::write(dir.join(".claude-plugin").join("plugin.json"), serde_json::json!({ "name": PLUGIN, "version": "0.0.0" }).to_string())?;
-    for a in &d.agent_defs {
+    // Agent da nghi khong vao plugin: Lead khong goi duoc no lam subagent.
+    for a in d.agent_defs.iter().filter(|a| agent_status(&d.config, &a.id) != "retired") {
         let q = |s: &str| serde_json::Value::from(s).to_string();
         let mut head = format!("name: {}\ndescription: {}\n", a.id, q(&a.description));
         if !a.tools.is_empty() {
@@ -220,13 +229,40 @@ pub fn office_create_department(root: String, name: String, icon: String, missio
     Ok(id)
 }
 
-/// Chi doi truong `workspace`, giu nguyen cac truong khac (ke ca truong nguoi dung tu them).
+/// Sua department.json qua Value: giu nguyen cac truong khac (ke ca truong nguoi dung tu them).
+pub fn edit_department(root: &Path, dept: &str, f: impl FnOnce(&mut serde_json::Value) -> Result<(), String>) -> Result<(), String> {
+    let p = root.join("departments").join(dept).join("department.json");
+    let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).map_err(err)?).map_err(err)?;
+    f(&mut v)?;
+    std::fs::write(&p, serde_json::to_string_pretty(&v).map_err(err)?).map_err(err)
+}
+
 #[tauri::command]
 pub fn office_set_workspace(root: String, dept: String, workspace: String) -> Result<(), String> {
-    let p = Path::new(&root).join("departments").join(&dept).join("department.json");
-    let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).map_err(err)?).map_err(err)?;
-    v["workspace"] = workspace.into();
-    std::fs::write(&p, serde_json::to_string_pretty(&v).map_err(err)?).map_err(err)
+    edit_department(Path::new(&root), &dept, |v| Ok(v["workspace"] = workspace.into()))
+}
+
+/// Chinh thuc (active, bo tran rieng) / thu viec / cho nghi. Cho nghi khi con task chua xong -> tu choi.
+#[tauri::command]
+pub fn office_set_agent_status(root: String, dept: String, agent: String, status: String) -> Result<(), String> {
+    if !["active", "probation", "retired"].contains(&status.as_str()) {
+        return Err(format!("trang thai khong hop le: {status}"));
+    }
+    if status == "retired" {
+        let open = crate::tasks::load_tasks(Path::new(&root))?.into_iter().filter(|t| t.dept == dept && t.agent == agent && t.status != "done").count();
+        if open > 0 {
+            return Err(format!("{agent} con task chua xong ({open}): duyet hoac huy truoc"));
+        }
+    }
+    edit_department(Path::new(&root), &dept, |v| {
+        v["status"][&agent] = status.clone().into();
+        if status == "active" {
+            if let Some(b) = v.get_mut("budget").and_then(|b| b.as_object_mut()) {
+                b.remove(&agent);
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Cam cung cho moi phien Office (spec muc 5).
@@ -372,6 +408,23 @@ mod tests {
         assert!(!md.contains("tools:")); // khong co tools -> bo truong (ke thua)
         let plugin: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.join(".claude-plugin/plugin.json")).unwrap()).unwrap();
         assert_eq!(plugin["name"], "office");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn write_plugin_skips_retired() {
+        let root = tmp("retired");
+        dept(&root, &["ok", "qa"], &[("ok", OK), ("qa", OK)]);
+        let p = root.join("departments/t/department.json");
+        let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
+        v["status"] = serde_json::json!({ "qa": "retired" });
+        fs::write(&p, v.to_string()).unwrap();
+        let d = &load_office(&root)[0];
+        assert_eq!(agent_status(&d.config, "qa"), "retired");
+        assert_eq!(agent_status(&d.config, "ok"), "active");
+        let dir = root.join("plugin");
+        write_plugin(d, &dir).unwrap();
+        assert!(dir.join("agents/ok.md").exists() && !dir.join("agents/qa.md").exists());
         fs::remove_dir_all(&root).unwrap();
     }
 

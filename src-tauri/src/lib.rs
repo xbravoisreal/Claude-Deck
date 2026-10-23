@@ -41,6 +41,7 @@ pub fn run() {
             office::office_set_workspace,
             office::office_launch,
             office::office_create_department,
+            office::office_set_agent_status,
             tasks::task_list,
             tasks::task_create,
             tasks::task_idle,
