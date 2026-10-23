@@ -6,11 +6,12 @@ import type { OfficePrefs } from "./Settings";
 import { ThemeCtx, themeVars, type Theme } from "./theme";
 import Room from "./Room";
 import AgentPanel from "./AgentPanel";
+import Candidates from "./Candidates";
 
 export type AgentDef = { id: string; name: string; description: string; tools: string[]; model: string | null };
 export type Dept = {
   id: string; name: string; icon: string; mission: string; workspace: string; agent_defs: AgentDef[]; errors: string[];
-  room: unknown; status?: Record<string, string>; defaults?: { maxTokens?: number };
+  room: unknown; status?: Record<string, string>; budget?: Record<string, number>; defaults?: { maxTokens?: number };
 };
 export type AgentLaunch = { label: string; args: string; settings: unknown };
 export type Task = {
@@ -35,6 +36,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<{ dept: string; agent: string } | null>(null);
   const [newRoom, setNewRoom] = useState<{ name: string; icon: string; mission: string } | null>(null);
+  const [hire, setHire] = useState<{ dept: Dept; need: string } | null>(null);
 
   const reload = () =>
     invoke<Dept[]>("office_load", { root: prefs.root }).then((d) => (setDepts(d), onDepts(d)), (e) => setError(String(e)));
@@ -83,6 +85,21 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
       reload();
     });
 
+  // "+ Tuyen": giao yeu cau cho Recruiter phong HR.
+  const recruit = () =>
+    safe(async () => {
+      if (!hire?.need.trim()) return;
+      await invoke("hr_request", { root: prefs.root, dept: hire.dept.id, need: hire.need.trim(), notesRoot: prefs.notes || null });
+      setHire(null);
+      reload();
+      onTasks();
+    });
+  const setStatus = async (d: Dept, a: AgentDef, status: string) => {
+    await invoke("office_set_agent_status", { root: prefs.root, dept: d.id, agent: a.id, status });
+    if (status === "retired") setPanel(null);
+    reload();
+  };
+
   const reveal = (path: string) => invoke("open_in_editor", { path }).catch((e) => setError(String(e)));
   const pd = panel && depts.find((d) => d.id === panel.dept);
   const pa = pd?.agent_defs.find((a) => a.id === panel!.agent);
@@ -105,7 +122,9 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
               onDesk={(a) => setPanel({ dept: d.id, agent: a.id })}
               onHistory={onHistory}
               onWorkspace={() => safe(() => pickWorkspace(d))}
+              onHire={() => setHire({ dept: d, need: "" })}
             />
+            {d.id === "hr" && <Candidates root={prefs.root} notes={prefs.notes} depts={depts} tick={tasks} onTasks={onTasks} onHired={reload} />}
           </div>
         ))}
         {/* Nut + tron goc duoi trai: tao phong moi. */}
@@ -125,6 +144,18 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
             </div>
           </div>
         )}
+        {hire && <div className="drawer-backdrop" onClick={() => setHire(null)} />}
+        {hire && (
+          <div className="new-room">
+            <b>Tuyển cho {hire.dept.icon} {hire.dept.name}</b>
+            <textarea autoFocus placeholder="Cần Agent làm gì? (vd viết changelog từ git log mỗi lần release)" value={hire.need} onChange={(e) => setHire({ ...hire, need: e.target.value })} />
+            <div className="hint">Recruiter (phòng HR) sẽ hỏi lại nếu cần, rồi soạn hồ sơ ở khu Ứng viên chờ duyệt.</div>
+            <div className="set-actions">
+              <button onClick={() => setHire(null)}>Huy</button>
+              <button className="primary" disabled={!hire.need.trim()} onClick={recruit}>Gửi HR</button>
+            </div>
+          </div>
+        )}
         <button className="room-add" title="Mo phong moi" onClick={() => setNewRoom(newRoom ? null : { name: "", icon: "🏢", mission: "" })}>+</button>
         {pd && pa && <div className="drawer-backdrop" onClick={() => setPanel(null)} />}
         {pd && pa && (
@@ -136,6 +167,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
             onAssign={(title, body) => assign(pd, pa, title, body)}
             onLaunch={() => launch(pd, pa)}
             onEdit={() => reveal(`${prefs.root}\\departments\\${pd.id}\\agents\\${pa.id}.md`)}
+            onStatus={(s) => setStatus(pd, pa, s)}
             onClose={() => setPanel(null)}
           />
         )}

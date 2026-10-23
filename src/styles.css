@@ -197,3 +197,19 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .tg-chats button { padding: 3px 8px; border: 1px solid #454545; border-radius: 4px; }
 .tg-chats button:hover { border-color: #d97757; color: #d97757; }
 .tg-status { margin-right: auto; align-self: center; font-size: 11px; color: #9a9a9a; }
+
+/* HR: ban "+ Tuyen", nhan thu viec, khu ung vien */
+.seat.hire { border: 2px dashed var(--o-muted); border-radius: 6px; color: var(--o-muted); font-size: 11px; opacity: .8; }
+.seat.hire:hover { color: var(--o-text); border-color: var(--o-accent); opacity: 1; }
+.seat-label .probation { color: var(--o-warn); font-size: 9px; }
+.candidates { padding: 8px 10px 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--o-border); }
+.cand-head { font-weight: 600; color: var(--o-text); }
+.cand { border: 1px solid var(--o-border); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+.cand-title .d, .cand .d { color: var(--o-muted); font-size: 11px; }
+.cand-desc { color: var(--o-muted); font-size: 12px; }
+.cand-tools { display: flex; flex-wrap: wrap; gap: 4px; }
+.cand-prob { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--o-muted); padding: 4px 6px; border-left: 3px solid var(--o-border); }
+.cand-prob.ok { border-color: #4caf50; }
+.cand-prob.bad { border-color: var(--o-warn); }
+.cand-result { white-space: pre-wrap; max-height: 4.2em; overflow: hidden; color: var(--o-text); }
+.new-room textarea { min-height: 70px; }

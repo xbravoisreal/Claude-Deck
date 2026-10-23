@@ -335,7 +335,7 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
             let rows: Vec<Value> = load_office(Path::new(&c.root))
                 .iter()
                 .filter(|d| !d.config.workspace.is_empty())
-                .flat_map(|d| d.agent_defs.iter().map(move |a| (format!("{} · {}", a.name, d.config.name), format!("as:{}/{}", d.config.id, a.id))))
+                .flat_map(|d| d.agent_defs.iter().filter(|a| crate::office::agent_status(&d.config, &a.id) != "retired").map(move |a| (format!("{} · {}", a.name, d.config.name), format!("as:{}/{}", d.config.id, a.id))))
                 .filter(|(_, data)| data.len() <= 64)
                 .map(|(label, data)| json!([{ "text": label, "callback_data": data }]))
                 .collect();
