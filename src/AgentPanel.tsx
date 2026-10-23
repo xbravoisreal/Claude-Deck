@@ -12,7 +12,7 @@ export default function AgentPanel({ dept, agent, tasks, onAssign, onLaunch, onE
   const [retire, setRetire] = useState(false);
   const [error, setError] = useState("");
   const status = dept.status?.[agent.id] ?? "active";
-  const change = (s: string) => onStatus(s).catch((e) => setError(String(e)));
+  const change = (s: string) => onStatus(s).catch((e) => (setError(String(e)), setRetire(false)));
   const [form, setForm] = useState<{ title: string; body: string } | null>(null);
   const [sending, setSending] = useState(false);
   const mine = tasks.filter((t) => t.dept === dept.id && t.agent === agent.id).sort((a, b) => b.created - a.created);

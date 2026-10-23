@@ -274,7 +274,14 @@ pub fn task_list(root: String) -> Result<Vec<Task>, String> {
 pub fn task_create(root: String, dept: String, agent: String, title: String, body: String, notes_root: Option<String>) -> Result<Task, String> {
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept).ok_or(format!("khong co phong {dept}"))?;
     let t = create_task(&d, &agent, &title, &body, notes_root.as_deref())?;
-    with_tasks(Path::new(&root), |ts| Ok(ts.push(t.clone())))?;
+    with_tasks(Path::new(&root), |ts| {
+        // Cho nghi chen vao giua create_task va luc ghi: kiem tra lai trong khoa.
+        let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept);
+        if d.is_some_and(|d| crate::office::agent_status(&d.config, &agent) == "retired") {
+            return Err(format!("{agent} da nghi viec"));
+        }
+        Ok(ts.push(t.clone()))
+    })?;
     Ok(t)
 }
 

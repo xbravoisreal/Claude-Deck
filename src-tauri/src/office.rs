@@ -136,7 +136,7 @@ pub fn write_plugin(d: &Department, dir: &Path) -> std::io::Result<()> {
         let q = |s: &str| serde_json::Value::from(s).to_string();
         let mut head = format!("name: {}\ndescription: {}\n", a.id, q(&a.description));
         if !a.tools.is_empty() {
-            head += &format!("tools: {}\n", a.tools.join(", "));
+            head += &format!("tools: {}\n", safe_tools(&a.tools).join(", "));
         }
         if let Some(m) = &a.model {
             head += &format!("model: {m}\n");
@@ -248,21 +248,33 @@ pub fn office_set_agent_status(root: String, dept: String, agent: String, status
     if !["active", "probation", "retired"].contains(&status.as_str()) {
         return Err(format!("trang thai khong hop le: {status}"));
     }
-    if status == "retired" {
-        let open = crate::tasks::load_tasks(Path::new(&root))?.into_iter().filter(|t| t.dept == dept && t.agent == agent && t.status != "done").count();
-        if open > 0 {
+    let rp = Path::new(&root);
+    if status == "retired" && load_office(rp).iter().any(|d| d.config.id == dept && d.config.lead == agent) {
+        return Err(format!("{agent} la lead cua phong, khong cho nghi duoc"));
+    }
+    // Kiem tra task va ghi trong cung khoa tasks.json: task moi khong chen vao giua.
+    crate::tasks::with_tasks(rp, |ts| {
+        let open = ts.iter().filter(|t| t.dept == dept && t.agent == agent && t.status != "done").count();
+        if status == "retired" && open > 0 {
             return Err(format!("{agent} con task chua xong ({open}): duyet hoac huy truoc"));
         }
-    }
-    edit_department(Path::new(&root), &dept, |v| {
-        v["status"][&agent] = status.clone().into();
+        edit_department(rp, &dept, |v| set_status(v, &agent, &status))
+    })
+}
+
+fn set_status(v: &mut serde_json::Value, agent: &str, status: &str) -> Result<(), String> {
+    {
+        if !(v["status"].is_object() || v["status"].is_null()) {
+            return Err("department.json: status phai la object".into());
+        }
+        v["status"][agent] = status.into();
         if status == "active" {
             if let Some(b) = v.get_mut("budget").and_then(|b| b.as_object_mut()) {
-                b.remove(&agent);
+                b.remove(agent);
             }
         }
         Ok(())
-    })
+    }
 }
 
 /// Cam cung cho moi phien Office (spec muc 5).
@@ -287,7 +299,7 @@ pub fn safe_tools(tools: &[String]) -> Vec<&str> {
         .collect()
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct LaunchSpec {
     /// Tham so them cho `claude` (pty_spawn dat sau `--settings`).
     pub args: String,
@@ -298,6 +310,13 @@ pub struct LaunchSpec {
 /// Agent di qua plugin dir (file), khong qua chuoi tham so: PowerShell 5.1 lam hong dau `"` khi truyen cho exe.
 pub fn launch_spec(d: &Department, agent_id: &str, plugin_dir: &Path, notes_root: Option<&str>) -> Result<LaunchSpec, String> {
     let agent = d.agent_defs.iter().find(|a| a.id == agent_id).ok_or(format!("khong co agent {agent_id}"))?;
+    if agent_status(&d.config, agent_id) == "retired" {
+        return Err(format!("{agent_id} da nghi viec"));
+    }
+    // Tool la bi loc mat thi Claude se cap moi tool: tu choi chay thay vi mo rong quyen.
+    if safe_tools(&agent.tools).len() != agent.tools.len() {
+        return Err(format!("{agent_id}: tools khong hop le ({})", agent.tools.join(", ")));
+    }
     // Lead goi subagent nen phien can du tool cua ca phong; agent khac chi can tool cua minh.
     let mut tools: Vec<&str> = vec![];
     let pool: Vec<&AgentDef> = if agent_id == d.config.lead { d.agent_defs.iter().collect() } else { vec![agent] };
@@ -594,11 +613,33 @@ mod tests {
     #[test]
     fn launch_spec_drops_unsafe_tools() {
         let (root, mut d) = software_dev("ls-unsafe");
-        let dev = d.agent_defs.iter_mut().find(|a| a.id == "dev").unwrap();
-        dev.tools = ["Read", "Bash(npm test:*)", "x; Remove-Item -Recurse C:\\", "a`b", "q'r"].map(String::from).to_vec();
-        let s = launch_spec(&d, "dev", Path::new("a"), None).unwrap();
+        // Lead gom tool cua ca phong: tool la cua agent khac bi bo, chi giu tool an toan (trong nhay).
+        for a in d.agent_defs.iter_mut() {
+            a.tools = if a.id == "qa" { ["Read", "Bash(npm test:*)", "x; Remove-Item -Recurse C:\\", "a`b", "q'r"].map(String::from).to_vec() } else { vec!["Read".into()] };
+        }
+        let s = launch_spec(&d, "tech-lead", Path::new("a"), None).unwrap();
         assert!(s.args.ends_with("--tools 'Read' 'Bash(npm test:*)'"), "{}", s.args);
         assert_eq!(safe_tools(&["Read & calc".to_string(), "Edit".into(), "50%".into()]), vec!["Edit"]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn launch_spec_refuses_filtered_tools_and_retired() {
+        let (root, mut d) = software_dev("ls-refuse");
+        d.agent_defs.iter_mut().find(|a| a.id == "qa").unwrap().tools = vec!["Read; Remove-Item x".into()];
+        assert!(launch_spec(&d, "qa", Path::new("a"), None).unwrap_err().contains("tools"));
+        d.config.status.insert("dev".into(), "retired".into());
+        assert!(launch_spec(&d, "dev", Path::new("a"), None).unwrap_err().contains("nghi"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lead_cannot_retire() {
+        let root = tmp("lead-retire");
+        seed_office(&root).unwrap();
+        let r = root.to_string_lossy().to_string();
+        assert!(office_set_agent_status(r.clone(), "software-dev".into(), "tech-lead".into(), "retired".into()).unwrap_err().contains("lead"));
+        assert!(office_set_agent_status(r, "hr".into(), "recruiter".into(), "retired".into()).is_err());
         fs::remove_dir_all(&root).unwrap();
     }
 

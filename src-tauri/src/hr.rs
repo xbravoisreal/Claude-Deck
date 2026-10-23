@@ -34,6 +34,35 @@ pub struct Probation {
     pub denied: Vec<String>,
 }
 
+/// Ung vien dang thu viec: khong cho chay trung, khong Nhan/Tu choi/Sua giua chung (thu muc dang dung).
+static RUNNING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+pub struct Running(String);
+
+impl Running {
+    pub fn start(cid: &str) -> Result<Self, String> {
+        let mut r = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        if r.iter().any(|x| x == cid) {
+            return Err(format!("{cid} dang thu viec"));
+        }
+        r.push(cid.into());
+        Ok(Running(cid.into()))
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).retain(|x| *x != self.0);
+    }
+}
+
+fn idle(cid: &str) -> Result<(), String> {
+    if RUNNING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|x| x == cid) {
+        return Err(format!("{cid} dang thu viec, doi xong da"));
+    }
+    Ok(())
+}
+
 fn err<E: ToString>(e: E) -> String {
     e.to_string()
 }
@@ -60,6 +89,14 @@ fn read_candidate(root: &Path, dir: &Path, id: &str) -> Candidate {
             None
         }
     };
+    if let Some(a) = &agent {
+        // Khong khai tools = Claude cap moi tool; tool la bi loc khoi dong lenh -> cung thanh moi tool. Ca hai deu chan.
+        if a.tools.is_empty() {
+            errors.push("agent.md phai khai bao tools (de trong = moi tool)".into());
+        } else if safe_tools(&a.tools).len() != a.tools.len() {
+            errors.push(format!("tools khong hop le: {}", a.tools.join(", ")));
+        }
+    }
     if !valid_id(id) {
         errors.push(format!("ten thu muc '{id}' khong hop le lam id agent"));
     }
@@ -150,6 +187,7 @@ pub fn hr_revise(root: String, cid: String, note: String, notes_root: Option<Str
     if !valid_id(&cid) || !candidates_dir(rp).join(&cid).is_dir() {
         return Err(format!("khong co ung vien {cid}"));
     }
+    idle(&cid)?;
     let body = format!(
         "Sua ho so ung vien `{}` theo nhan xet cua sep (sua tai cho, giu dinh dang agent.md / candidate.json / sample-task.md; xoa probation.json neu doi agent.md hoac sample-task.md):\n\n{note}\n",
         candidates_dir(rp).join(&cid).to_string_lossy()
@@ -172,23 +210,42 @@ pub fn hr_hire(root: String, cid: String) -> Result<(), String> {
     if !valid_id(&cid) || !candidates_dir(rp).join(&cid).is_dir() {
         return Err(format!("khong co ung vien {cid}"));
     }
+    idle(&cid)?;
     let c = read_candidate(rp, &candidates_dir(rp).join(&cid), &cid);
     if !c.error.is_empty() {
         return Err(if c.error.contains("da co agent") { format!("da co agent {cid}") } else { c.error });
     }
+    if load_office(rp).iter().any(|d| d.config.id == c.dept && d.errors.iter().any(|e| e.starts_with("department.json"))) {
+        return Err(format!("department.json cua phong {} dang hong", c.dept));
+    }
     let md = std::fs::read_to_string(candidates_dir(rp).join(&cid).join("agent.md")).map_err(err)?;
     let agents = rp.join("departments").join(&c.dept).join("agents");
+    let file = agents.join(format!("{cid}.md"));
+    if file.exists() {
+        return Err(format!("da co file agents/{cid}.md trong phong {} (khong ghi de)", c.dept));
+    }
     std::fs::create_dir_all(&agents).map_err(err)?;
-    std::fs::write(agents.join(format!("{cid}.md")), md).map_err(err)?;
-    edit_department(rp, &c.dept, |v| {
-        if !v["agents"].is_array() {
-            v["agents"] = serde_json::json!([]);
+    std::fs::write(&file, md).map_err(err)?;
+    let edited = edit_department(rp, &c.dept, |v| {
+        for k in ["status", "budget"] {
+            match &v[k] {
+                serde_json::Value::Null => v[k] = serde_json::json!({}),
+                serde_json::Value::Object(_) => {}
+                _ => return Err(format!("department.json: {k} phai la object")),
+            }
         }
-        v["agents"].as_array_mut().unwrap().push(cid.clone().into());
+        match v["agents"].as_array_mut() {
+            Some(a) => a.push(cid.clone().into()),
+            None => v["agents"] = serde_json::json!([cid]),
+        }
         v["status"][&cid] = "probation".into();
         v["budget"][&cid] = PROBATION_BUDGET.into();
         Ok(())
-    })?;
+    });
+    if let Err(e) = edited {
+        let _ = std::fs::remove_file(&file); // file vua tao o tren, chua ai dung
+        return Err(e);
+    }
     archive(rp, &cid, "_hired")
 }
 
@@ -198,6 +255,7 @@ pub fn hr_reject(root: String, cid: String) -> Result<(), String> {
     if !valid_id(&cid) || !candidates_dir(rp).join(&cid).is_dir() {
         return Err(format!("khong co ung vien {cid}"));
     }
+    idle(&cid)?;
     archive(rp, &cid, "_rejected")
 }
 
@@ -255,7 +313,12 @@ fn run_probation(root: &Path, cid: &str) -> Result<Probation, String> {
         return Err(format!("khong co ung vien {cid}"));
     }
     let cdir = candidates_dir(root).join(cid);
-    let agent = read_candidate(root, &cdir, cid).agent.ok_or("agent.md hong, khong thu viec duoc")?;
+    let c = read_candidate(root, &cdir, cid);
+    let agent = match (c.agent, c.error.is_empty()) {
+        (Some(a), true) => a,
+        _ => return Err(c.error),
+    };
+    let _guard = Running::start(cid)?;
     let sample = cdir.join("sample-task.md");
     if !sample.is_file() {
         return Err("thieu sample-task.md".into());
@@ -286,15 +349,18 @@ fn run_probation(root: &Path, cid: &str) -> Result<Probation, String> {
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
         .spawn()
         .map_err(|e| format!("khong chay duoc claude: {e}"))?;
-    // Doc o luong rieng de ong khong day lam claude treo.
+    // Doc o luong rieng de ong khong day lam claude treo. Tra qua kenh: tien trinh con mo coi (vd agent chay
+    // `start ...`) giu ong mo sau khi cmd thoat -> chi cho them 5s roi bo, khong treo thu viec.
     let pipe = |r: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let mut s = String::new();
+            let mut b = Vec::new();
             if let Some(mut r) = r {
-                let _ = r.read_to_string(&mut s);
+                let _ = r.read_to_end(&mut b);
             }
-            s
-        })
+            let _ = tx.send(String::from_utf8_lossy(&b).into_owned());
+        });
+        rx
     };
     let out = pipe(child.stdout.take().map(|r| Box::new(r) as Box<dyn Read + Send>));
     let errs = pipe(child.stderr.take().map(|r| Box::new(r) as Box<dyn Read + Send>));
@@ -310,7 +376,8 @@ fn run_probation(root: &Path, cid: &str) -> Result<Probation, String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    let (out, errs) = (out.join().unwrap_or_default(), errs.join().unwrap_or_default());
+    let wait = std::time::Duration::from_secs(5);
+    let (out, errs) = (out.recv_timeout(wait).unwrap_or_default(), errs.recv_timeout(wait).unwrap_or_default());
     let files: Vec<String> = std::fs::read_dir(&work)
         .into_iter()
         .flatten()
@@ -400,6 +467,48 @@ mod tests {
         println!("{p:?}");
         assert!(p.files.contains(&"hello.txt".to_string()), "{p:?}");
         assert!(candidates_dir(&root).join("hello").join("probation.json").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn candidate_tools_must_be_declared_and_safe() {
+        let root = tmp("tools");
+        candidate(&root, "evil", "software-dev", "---\nname: E\ndescription: d\ntools: Read; Remove-Item x\n---\np");
+        candidate(&root, "all", "software-dev", "---\nname: A\ndescription: d\n---\np"); // khong khai tools = moi tool
+        let cs = hr_candidates(root.to_string_lossy().into());
+        assert!(cs.iter().all(|c| c.error.contains("tools")), "{:?}", cs.iter().map(|c| &c.error).collect::<Vec<_>>());
+        assert!(hr_hire(root.to_string_lossy().into(), "evil".into()).is_err());
+        assert!(run_probation(&root, "evil").unwrap_err().contains("tools"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn busy_candidate_cannot_be_hired_or_rejected() {
+        let root = tmp("busy");
+        let r = root.to_string_lossy().to_string();
+        candidate(&root, "writer", "software-dev", MD);
+        let g = Running::start("writer").unwrap();
+        assert!(Running::start("writer").is_err()); // khong chay thu viec trung
+        assert!(hr_hire(r.clone(), "writer".into()).unwrap_err().contains("thu viec"));
+        assert!(hr_reject(r.clone(), "writer".into()).unwrap_err().contains("thu viec"));
+        drop(g);
+        hr_reject(r, "writer".into()).unwrap();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn hire_into_broken_department_writes_nothing() {
+        let root = tmp("hire-broken");
+        candidate(&root, "writer", "software-dev", MD);
+        crate::office::edit_department(&root, "software-dev", |v| Ok(v["status"] = "hong".into())).unwrap();
+        assert!(hr_hire(root.to_string_lossy().into(), "writer".into()).is_err()); // khong panic
+        assert!(!root.join("departments/software-dev/agents/writer.md").exists());
+        assert!(candidates_dir(&root).join("writer").exists());
+        // agents/<cid>.md co san ma khong nam trong danh sach: khong ghi de
+        crate::office::edit_department(&root, "software-dev", |v| Ok(v["status"] = serde_json::json!({}))).unwrap();
+        fs::write(root.join("departments/software-dev/agents/writer.md"), "cu").unwrap();
+        assert!(hr_hire(root.to_string_lossy().into(), "writer".into()).unwrap_err().contains("da co file"));
+        assert_eq!(fs::read_to_string(root.join("departments/software-dev/agents/writer.md")).unwrap(), "cu");
         let _ = fs::remove_dir_all(&root);
     }
 
