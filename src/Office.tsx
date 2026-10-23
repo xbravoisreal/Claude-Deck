@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { OfficePrefs } from "./Settings";
 import { ThemeCtx, themeVars, type Theme } from "./theme";
@@ -42,6 +43,11 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
     reload();
     invoke<Theme>("theme_load", { root: prefs.root, name: prefs.theme }).then(setTheme, (e) => setError(String(e)));
   }, [prefs.root, prefs.theme]);
+  // Bot Telegram doi du an cua phong (/duan) -> ve lai ke sach.
+  useEffect(() => {
+    const off = listen("office-depts-changed", () => prefs.root && reload());
+    return () => void off.then((f) => f());
+  }, [prefs.root]);
 
   const pickWorkspace = async (d: Dept) => {
     const dir = await open({ directory: true });

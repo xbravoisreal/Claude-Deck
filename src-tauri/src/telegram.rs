@@ -1,7 +1,7 @@
 use crate::office::load_office;
 use crate::tasks::{self, Task};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -21,6 +21,12 @@ pub enum Action {
     NewTask(String),
     /// (phong, agent, noi dung) sau khi bam nut chon agent.
     Assign(String, String, String),
+    /// /duan: chon phong de doi du an.
+    Projects,
+    /// Da chon phong, cho chon/go ten du an.
+    PickDept(String),
+    /// (phong, ten du an trong thu muc goc) - chua co thi tao moi.
+    SetProject(String, String),
     Ignore,
 }
 
@@ -29,6 +35,8 @@ pub enum Action {
 pub struct Chat {
     pub pending_rework: Option<String>,
     pub pending_task: Option<String>,
+    /// Phong dang cho ten du an.
+    pub pending_project: Option<String>,
 }
 
 /// Thoat ky tu cho parse_mode HTML cua Telegram.
@@ -60,11 +68,23 @@ pub fn parse_update(u: &Value, chat_id: i64, st: &mut Chat) -> (Action, Option<S
         let a = match kind {
             "ok" => Action::Approve(id),
             "re" => {
+                st.pending_project = None;
                 st.pending_rework = Some(id.clone());
                 Action::Rework(id)
             }
             "al" => Action::Allow(id),
             "de" => Action::Deny(id),
+            "pd" => {
+                (st.pending_task, st.pending_rework, st.pending_project) = (None, None, Some(id.clone()));
+                Action::PickDept(id)
+            }
+            "pj" => match id.split_once('/') {
+                Some((dept, name)) => {
+                    st.pending_project = None;
+                    Action::SetProject(dept.into(), name.into())
+                }
+                None => Action::Ignore,
+            },
             "as" => match (id.split_once('/'), st.pending_task.take()) {
                 (Some((dept, agent)), Some(text)) => Action::Assign(dept.into(), agent.into(), text),
                 _ => Action::Ignore,
@@ -77,9 +97,17 @@ pub fn parse_update(u: &Value, chat_id: i64, st: &mut Chat) -> (Action, Option<S
     if m["chat"]["id"].as_i64() != Some(chat_id) || !sender_ok(m) {
         return (Action::Ignore, None);
     }
-    let Some(text) = m["text"].as_str().map(str::trim).filter(|t| !t.is_empty() && !t.starts_with('/')) else { return (Action::Ignore, None) };
+    let text = m["text"].as_str().map(str::trim).unwrap_or("");
+    if text == "/duan" || text.starts_with("/duan@") {
+        return (Action::Projects, None);
+    }
+    if text.is_empty() || text.starts_with('/') {
+        return (Action::Ignore, None);
+    }
     let a = if let Some(to) = m["reply_to_message"]["message_id"].as_i64() {
         Action::Reply(to, text.into())
+    } else if let Some(dept) = st.pending_project.take() {
+        Action::SetProject(dept, text.into())
     } else if let Some(id) = st.pending_rework.take() {
         Action::ReworkNote(id, text.into())
     } else {
@@ -87,6 +115,33 @@ pub fn parse_update(u: &Value, chat_id: i64, st: &mut Chat) -> (Action, Option<S
         Action::NewTask(text.into())
     };
     (a, None)
+}
+
+/// Thu muc du an moi/cu nam canh du an hien tai cua phong (cung thu muc cha). Chi nhan ten, khong nhan duong dan.
+pub fn project_path(workspace: &str, name: &str) -> Result<PathBuf, String> {
+    let parent = Path::new(workspace).parent().filter(|p| !p.as_os_str().is_empty()).ok_or("phòng chưa có dự án: chọn thư mục trên app trước")?;
+    let name = name.trim();
+    let lower = name.to_lowercase();
+    let reserved = ["con", "prn", "aux", "nul"].contains(&lower.as_str())
+        || (lower.len() == 4 && (lower.starts_with("com") || lower.starts_with("lpt")) && lower.ends_with(|c: char| c.is_ascii_digit()));
+    if name.is_empty() || name.starts_with('.') || name.ends_with('.') || reserved || name.chars().any(|c| c.is_control() || r#"\/:*?"<>|"#.contains(c)) {
+        return Err(format!("tên dự án không hợp lệ: {name}"));
+    }
+    Ok(parent.join(name))
+}
+
+/// Thu muc con (du an) trong thu muc goc, moi sua truoc. Bo thu muc an.
+fn projects(parent: &Path) -> Vec<String> {
+    let mut v: Vec<_> = std::fs::read_dir(parent)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| Some((e.metadata().and_then(|m| m.modified()).ok()?, e.file_name().into_string().ok()?)))
+        .filter(|(_, n)| !n.starts_with('.') && !n.starts_with('$'))
+        .collect();
+    v.sort_by(|a, b| b.0.cmp(&a.0));
+    v.into_iter().map(|(_, n)| n).collect()
 }
 
 fn buttons(rows: &[(&str, String)]) -> Value {
@@ -208,7 +263,9 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
     // Reply khong vao tin cho tra loi nao ma dang cho nhan xet lam lai (vd reply vao cau hoi "Nhan xet...?") -> nhan xet.
     if let Action::Reply(to, text) = &action {
         if waiting_by_msg(*to).is_none() {
-            if let Some(id) = chat.pending_rework.take() {
+            if let Some(dept) = chat.pending_project.take() {
+                action = Action::SetProject(dept, text.clone());
+            } else if let Some(id) = chat.pending_rework.take() {
                 action = Action::ReworkNote(id, text.clone());
             }
         }
@@ -290,6 +347,61 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
 {}", escape(&clip(&text, 300))), &json!({ "inline_keyboard": rows }));
             }
         }
+        Action::Projects => {
+            let rows: Vec<Value> = load_office(Path::new(&c.root))
+                .iter()
+                .map(|d| {
+                    let cur = Path::new(&d.config.workspace).file_name().map_or("chưa có".into(), |n| n.to_string_lossy().into_owned());
+                    json!([{ "text": format!("{} {} · {cur}", d.config.icon, d.config.name), "callback_data": format!("pd:{}", d.config.id) }])
+                })
+                .collect();
+            let _ = send(c, "📁 Đổi dự án cho phòng nào?", &json!({ "inline_keyboard": rows }));
+        }
+        Action::PickDept(dept) => {
+            answer(c, &qid, "");
+            let d = load_office(Path::new(&c.root)).into_iter().find(|d| d.config.id == dept && !d.config.workspace.is_empty());
+            match d.as_ref().and_then(|d| Path::new(&d.config.workspace).parent().map(|p| (d, p))) {
+                Some((d, parent)) => {
+                    let cur = Path::new(&d.config.workspace).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    // ponytail: toi da 30 du an moi sua gan nhat; du an cu hon thi go ten.
+                    let names: Vec<String> = projects(parent).into_iter().filter(|n| format!("pj:{dept}/{n}").len() <= 64).take(30).collect();
+                    let rows: Vec<Value> = names
+                        .chunks(2)
+                        .map(|ch| Value::Array(ch.iter().map(|n| json!({ "text": if *n == cur { format!("✓ {n}") } else { n.clone() }, "callback_data": format!("pj:{dept}/{n}") })).collect()))
+                        .collect();
+                    let text = format!("📁 <b>{}</b> · gốc {}\nChọn dự án, hoặc gõ tên (chưa có thì tạo thư mục mới).", escape(&d.config.name), escape(&parent.to_string_lossy()));
+                    let _ = send(c, &text, &json!({ "inline_keyboard": rows }));
+                }
+                None => {
+                    chat.pending_project = None;
+                    let _ = send(c, "Phòng chưa có dự án: chọn thư mục trên app trước.", &Value::Null);
+                }
+            }
+        }
+        Action::SetProject(dept, name) => {
+            answer(c, &qid, "");
+            let ws = load_office(Path::new(&c.root)).into_iter().find(|d| d.config.id == dept).map(|d| d.config.workspace).unwrap_or_default();
+            let res = project_path(&ws, &name).and_then(|p| {
+                let new = !p.is_dir();
+                if new {
+                    std::fs::create_dir(&p).map_err(|e| format!("không tạo được thư mục: {e}"))?;
+                }
+                crate::office::office_set_workspace(c.root.clone(), dept.clone(), p.to_string_lossy().into_owned())?;
+                Ok((p, new))
+            });
+            let text = match res {
+                Ok((p, new)) => {
+                    let _ = app.emit("office-depts-changed", ());
+                    format!("📁 Phòng giờ làm dự án <b>{}</b>{}\n{}", escape(name.trim()), if new { " (mới tạo)" } else { "" }, escape(&p.to_string_lossy()))
+                }
+                Err(e) => format!("Không đổi được dự án: {}", escape(&e)),
+            };
+            if cb_msg != 0 {
+                edit(c, cb_msg, &text);
+            } else {
+                let _ = send(c, &text, &Value::Null);
+            }
+        }
         Action::Assign(dept, agent, text) => {
             let title = clip(text.lines().next().unwrap_or(""), 80);
             match tasks::task_create(c.root.clone(), dept, agent, title, text, Some(c.notes.clone())) {
@@ -337,6 +449,7 @@ pub fn confirm_offset() {
 /// Vong long-polling getUpdates. Loi mang/token -> cho 5s, 10s... toi da 60s. Chi vong dang song moi ghi trang thai.
 fn poll(app: AppHandle, c: Cfg, gen: u64) {
     let (mut chat, mut wait) = (Chat::default(), 5u64);
+    let _ = api(&c.token, "setMyCommands", json!({ "commands": [{ "command": "duan", "description": "Đổi dự án của phòng" }] }));
     let live = || GEN.load(Ordering::SeqCst) == gen;
     while live() {
         let off = OFFSET.load(Ordering::SeqCst);
@@ -564,6 +677,29 @@ mod tests {
         u["message"]["reply_to_message"] = json!({ "message_id": 5 });
         assert_eq!(parse_update(&u, ME, &mut st).0, Action::Reply(5, "commit readme".into()));
         assert_eq!(st.pending_rework.as_deref(), Some("t1")); // handle quyet dinh: tin 5 khong phai task cho -> nhan xet lam lai
+    }
+
+    #[test]
+    fn project_flow_pick_room_then_name() {
+        let mut st = Chat { pending_task: Some("x".into()), ..Default::default() };
+        assert_eq!(parse_update(&msg(ME, Some("/duan")), ME, &mut st).0, Action::Projects);
+        assert_eq!(parse_update(&msg(ME, Some("/duan@Claudeck17_bot")), ME, &mut st).0, Action::Projects);
+        assert_eq!(parse_update(&cb(ME, "pd:software-dev"), ME, &mut st).0, Action::PickDept("software-dev".into()));
+        assert!(st.pending_task.is_none()); // moi luc chi cho mot cau hoi
+        assert_eq!(parse_update(&msg(ME, Some("app moi")), ME, &mut st).0, Action::SetProject("software-dev".into(), "app moi".into()));
+        assert_eq!(parse_update(&msg(ME, Some("sua readme")), ME, &mut st).0, Action::NewTask("sua readme".into()));
+        assert_eq!(parse_update(&cb(ME, "pj:software-dev/caby"), ME, &mut st).0, Action::SetProject("software-dev".into(), "caby".into()));
+    }
+
+    #[test]
+    fn project_path_stays_in_parent_of_workspace() {
+        let ws = std::env::temp_dir().join("cd-pj").join("caby");
+        let ws = ws.to_string_lossy();
+        assert_eq!(project_path(&ws, " app moi ").unwrap(), std::env::temp_dir().join("cd-pj").join("app moi"));
+        for bad in ["", "..", "../x", "a\\b", "a/b", "c:", "x?", ".git", "con"] {
+            assert!(project_path(&ws, bad).is_err(), "{bad}");
+        }
+        assert!(project_path("", "x").is_err()); // phong chua co du an -> khong biet thu muc goc
     }
 
     #[test]
