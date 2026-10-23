@@ -48,6 +48,7 @@ pub fn run() {
             hr::hr_revise,
             hr::hr_hire,
             hr::hr_reject,
+            hr::hr_probation,
             tasks::task_list,
             tasks::task_create,
             tasks::task_idle,

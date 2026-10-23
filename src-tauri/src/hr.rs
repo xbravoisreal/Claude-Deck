@@ -1,4 +1,4 @@
-use crate::office::{edit_department, load_office, parse_agent, AgentDef};
+use crate::office::{edit_department, load_office, parse_agent, safe_tools, write_plugin, AgentDef, DeptConfig, Department, DENY_ALL};
 use crate::tasks::{create_task, with_tasks, Task};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -29,6 +29,9 @@ pub struct Probation {
     pub cost: f64,
     pub files: Vec<String>,
     pub when: i64,
+    /// Tool bi chan trong luc thu viec (permission_denials).
+    #[serde(default)]
+    pub denied: Vec<String>,
 }
 
 fn err<E: ToString>(e: E) -> String {
@@ -198,6 +201,137 @@ pub fn hr_reject(root: String, cid: String) -> Result<(), String> {
     archive(rp, &cid, "_rejected")
 }
 
+const PROBATION_PROMPT: &str = "Lam viec mo ta trong file sample-task.md o thu muc hien tai.";
+/// ponytail: tran thoi gian co dinh 10 phut; dua vao Settings neu task mau dai hon.
+const PROBATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Dong lenh chay sau `cmd /C` (claude la claude.cmd). Prompt dung ngay sau -p, truoc option nhieu gia tri;
+/// duong dan va tool deu nam trong "..." (cmd khong hieu & | > ben trong nhay).
+pub fn probation_cmdline(plugin_dir: &Path, settings: &Path, agent: &AgentDef) -> String {
+    let mut s = format!(
+        "claude -p \"{PROBATION_PROMPT}\" --output-format json --max-budget-usd 0.5 --plugin-dir \"{}\" --agent office:{} --permission-mode auto --strict-mcp-config --settings \"{}\"",
+        plugin_dir.to_string_lossy(),
+        agent.id,
+        settings.to_string_lossy()
+    );
+    let tools = safe_tools(&agent.tools);
+    if !tools.is_empty() {
+        s += &format!(" --tools {}", tools.iter().map(|t| format!("\"{t}\"")).collect::<Vec<_>>().join(" "));
+    }
+    s
+}
+
+fn chars(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+/// Doc JSON cua `claude -p --output-format json`; khong phai JSON (loi dang nhap...) -> ok=false kem 500 ky tu dau.
+pub fn parse_probation(out: &str, files: Vec<String>, when: i64) -> Probation {
+    let base = Probation { files, when, ..Default::default() };
+    match serde_json::from_str::<serde_json::Value>(out.trim()) {
+        Ok(v) if v.is_object() => {
+            let u = &v["usage"];
+            let n = |k: &str| u[k].as_u64().unwrap_or(0);
+            Probation {
+                ok: v["is_error"] == false,
+                result: chars(v["result"].as_str().or(v["subtype"].as_str()).unwrap_or("khong co ket qua"), 2000),
+                turns: v["num_turns"].as_u64().unwrap_or(0),
+                tokens: n("input_tokens") + n("output_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens"),
+                cost: v["total_cost_usd"].as_f64().unwrap_or(0.0),
+                denied: v["permission_denials"].as_array().into_iter().flatten().filter_map(|d| d["tool_name"].as_str().map(String::from)).collect(),
+                ..base
+            }
+        }
+        _ => Probation { result: if out.trim().is_empty() { "khong co ket qua".into() } else { chars(out.trim(), 500) }, ..base },
+    }
+}
+
+/// ClaudeDeck (khong phai Recruiter) chay ung vien tren task mau trong thu muc nhap <root>/hr/probation/<cid>/.
+fn run_probation(root: &Path, cid: &str) -> Result<Probation, String> {
+    use std::io::Read;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    if !valid_id(cid) {
+        return Err(format!("khong co ung vien {cid}"));
+    }
+    let cdir = candidates_dir(root).join(cid);
+    let agent = read_candidate(root, &cdir, cid).agent.ok_or("agent.md hong, khong thu viec duoc")?;
+    let sample = cdir.join("sample-task.md");
+    if !sample.is_file() {
+        return Err("thieu sample-task.md".into());
+    }
+    // Thu muc nhap cua app: lam moi moi lan thu.
+    let work = root.join("hr").join("probation").join(cid);
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).map_err(err)?;
+    std::fs::copy(&sample, work.join("sample-task.md")).map_err(err)?;
+    let tmp = std::env::temp_dir();
+    let plugin = tmp.join(format!("claudedeck-probation-{cid}"));
+    let dept = Department {
+        config: DeptConfig { id: "probation".into(), lead: cid.into(), agents: vec![cid.into()], ..Default::default() },
+        agent_defs: vec![agent.clone()],
+        errors: vec![],
+        room: serde_json::json!({}),
+    };
+    write_plugin(&dept, &plugin).map_err(err)?;
+    let settings = tmp.join(format!("claudedeck-probation-{cid}.json"));
+    std::fs::write(&settings, serde_json::json!({ "permissions": { "deny": DENY_ALL } }).to_string()).map_err(err)?;
+
+    let mut child = Command::new("cmd")
+        .raw_arg(format!("/C {}", probation_cmdline(&plugin, &settings, &agent)))
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .spawn()
+        .map_err(|e| format!("khong chay duoc claude: {e}"))?;
+    // Doc o luong rieng de ong khong day lam claude treo.
+    let pipe = |r: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            if let Some(mut r) = r {
+                let _ = r.read_to_string(&mut s);
+            }
+            s
+        })
+    };
+    let out = pipe(child.stdout.take().map(|r| Box::new(r) as Box<dyn Read + Send>));
+    let errs = pipe(child.stderr.take().map(|r| Box::new(r) as Box<dyn Read + Send>));
+    let start = std::time::Instant::now();
+    let mut timed_out = false;
+    while child.try_wait().map_err(err)?.is_none() {
+        if start.elapsed() > PROBATION_TIMEOUT {
+            // Giet ca cay (cmd -> node claude).
+            let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).creation_flags(0x0800_0000).output();
+            let _ = child.wait();
+            timed_out = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    let (out, errs) = (out.join().unwrap_or_default(), errs.join().unwrap_or_default());
+    let files: Vec<String> = std::fs::read_dir(&work)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n != "sample-task.md")
+        .collect();
+    let mut p = parse_probation(if out.trim().is_empty() { &errs } else { &out }, files, chrono::Local::now().timestamp_millis());
+    if timed_out {
+        p.ok = false;
+        p.result = format!("Qua {} phut, da dung. {}", PROBATION_TIMEOUT.as_secs() / 60, p.result);
+    }
+    std::fs::write(cdir.join("probation.json"), serde_json::to_string_pretty(&p).map_err(err)?).map_err(err)?;
+    Ok(p)
+}
+
+#[tauri::command]
+pub async fn hr_probation(root: String, cid: String) -> Result<Probation, String> {
+    tauri::async_runtime::spawn_blocking(move || run_probation(Path::new(&root), &cid)).await.map_err(err)?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +354,54 @@ mod tests {
     }
 
     const MD: &str = "---\nname: Writer\ndescription: Viet changelog\ntools: Read, Write\nmodel: sonnet\n---\nBan viet changelog.";
+
+    fn writer() -> AgentDef {
+        parse_agent("writer", MD).unwrap()
+    }
+
+    #[test]
+    fn probation_cmdline_puts_prompt_first() {
+        let s = probation_cmdline(Path::new("C:\\t\\p d"), Path::new("C:\\t\\s.json"), &writer());
+        assert!(s.starts_with("claude -p \""), "{s}");
+        for x in ["--output-format json", "--max-budget-usd 0.5", "--plugin-dir \"C:\\t\\p d\"", "--agent office:writer", "--permission-mode auto", "--strict-mcp-config", "--settings \"C:\\t\\s.json\""] {
+            assert!(s.contains(x), "{x} / {s}");
+        }
+        assert!(s.ends_with("--tools \"Read\" \"Write\""), "{s}");
+        assert!(!s.contains("bypass") && !s.contains("dangerously"));
+    }
+
+    #[test]
+    fn parse_probation_reads_usage() {
+        let out = r#"{"type":"result","subtype":"success","is_error":false,"num_turns":3,"result":"Da viet CHANGELOG.md","total_cost_usd":0.12,
+            "usage":{"input_tokens":2,"output_tokens":10,"cache_read_input_tokens":100,"cache_creation_input_tokens":1000},
+            "permission_denials":[{"tool_name":"Bash","tool_input":{}}]}"#;
+        let p = parse_probation(out, vec!["CHANGELOG.md".into()], 7);
+        assert_eq!(p, Probation { ok: true, result: "Da viet CHANGELOG.md".into(), turns: 3, tokens: 1112, cost: 0.12, files: vec!["CHANGELOG.md".into()], when: 7, denied: vec!["Bash".into()] });
+        let over = parse_probation(r#"{"subtype":"error_max_budget_usd","is_error":true,"num_turns":9}"#, vec![], 0);
+        assert!(!over.ok && over.result.contains("error_max_budget_usd"));
+    }
+
+    #[test]
+    fn parse_probation_bad_output() {
+        let p = parse_probation("Error: not logged in", vec![], 0);
+        assert!(!p.ok && p.result.contains("not logged in"));
+        assert!(!parse_probation("  ", vec![], 0).result.is_empty());
+    }
+
+    /// Chay that (ton it token): cargo test --lib probation_real_run -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn probation_real_run() {
+        let root = tmp("real");
+        let md = "---\nname: Hello\ndescription: Ghi file chao\ntools: Write, Read\nmodel: haiku\n---\nBan ghi file theo yeu cau, khong hoi lai.";
+        candidate(&root, "hello", "software-dev", md);
+        fs::write(candidates_dir(&root).join("hello").join("sample-task.md"), "Tao file hello.txt voi noi dung: xin chao").unwrap();
+        let p = run_probation(&root, "hello").unwrap();
+        println!("{p:?}");
+        assert!(p.files.contains(&"hello.txt".to_string()), "{p:?}");
+        assert!(candidates_dir(&root).join("hello").join("probation.json").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn valid_id_rules() {

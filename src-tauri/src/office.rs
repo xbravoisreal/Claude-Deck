@@ -266,7 +266,7 @@ pub fn office_set_agent_status(root: String, dept: String, agent: String, status
 }
 
 /// Cam cung cho moi phien Office (spec muc 5).
-const DENY_ALL: &[&str] = &[
+pub(crate) const DENY_ALL: &[&str] = &[
     "Bash(git push:*)",
     "Bash(rm -rf:*)",
     "Bash(Remove-Item:*)",
@@ -277,6 +277,15 @@ const DENY_ALL: &[&str] = &[
     "WebSearch",
 ];
 const DENY_REVIEWER: &[&str] = &["Edit", "Write", "NotebookEdit"];
+
+/// Ten tool di vao dong lenh (PowerShell / cmd): chi giu ky tu an toan, bo tool la (vd do Recruiter viet "Read; Remove-Item ...").
+pub fn safe_tools(tools: &[String]) -> Vec<&str> {
+    tools
+        .iter()
+        .map(String::as_str)
+        .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_alphanumeric() || "_-:*.() /".contains(c)))
+        .collect()
+}
 
 #[derive(Serialize)]
 pub struct LaunchSpec {
@@ -292,9 +301,11 @@ pub fn launch_spec(d: &Department, agent_id: &str, plugin_dir: &Path, notes_root
     // Lead goi subagent nen phien can du tool cua ca phong; agent khac chi can tool cua minh.
     let mut tools: Vec<&str> = vec![];
     let pool: Vec<&AgentDef> = if agent_id == d.config.lead { d.agent_defs.iter().collect() } else { vec![agent] };
-    for t in pool.iter().flat_map(|a| &a.tools) {
-        if !tools.contains(&t.as_str()) {
-            tools.push(t);
+    for a in pool.iter().filter(|a| a.id == agent_id || agent_status(&d.config, &a.id) != "retired") {
+        for t in safe_tools(&a.tools) {
+            if !tools.contains(&t) {
+                tools.push(t);
+            }
         }
     }
     let mut args = format!(
@@ -303,7 +314,7 @@ pub fn launch_spec(d: &Department, agent_id: &str, plugin_dir: &Path, notes_root
         ps_quote(&format!("{PLUGIN}:{agent_id}"))
     );
     if !tools.is_empty() {
-        args += &format!(" --tools {}", tools.join(" "));
+        args += &format!(" --tools {}", tools.iter().map(|t| ps_quote(t)).collect::<Vec<_>>().join(" "));
     }
     if let Some(n) = notes_root.filter(|n| !n.is_empty()) {
         args += &format!(" --add-dir {}", ps_quote(&Path::new(n).join("ClaudeDeck").to_string_lossy()));
@@ -577,6 +588,17 @@ mod tests {
         let (root, d) = software_dev("ls-apos");
         let s = launch_spec(&d, "dev", Path::new("a"), Some("H:\\Bob's Vault")).unwrap();
         assert!(s.args.ends_with("--add-dir 'H:\\Bob''s Vault\\ClaudeDeck'"), "{}", s.args);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn launch_spec_drops_unsafe_tools() {
+        let (root, mut d) = software_dev("ls-unsafe");
+        let dev = d.agent_defs.iter_mut().find(|a| a.id == "dev").unwrap();
+        dev.tools = ["Read", "Bash(npm test:*)", "x; Remove-Item -Recurse C:\\", "a`b", "q'r"].map(String::from).to_vec();
+        let s = launch_spec(&d, "dev", Path::new("a"), None).unwrap();
+        assert!(s.args.ends_with("--tools 'Read' 'Bash(npm test:*)'"), "{}", s.args);
+        assert_eq!(safe_tools(&["Read & calc".to_string(), "Edit".into(), "50%".into()]), vec!["Edit"]);
         fs::remove_dir_all(&root).unwrap();
     }
 
