@@ -192,3 +192,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .new-room-row { display: flex; gap: 6px; }
 .new-room-row input:last-child { flex: 1; }
 .new-room-icon { width: 44px; text-align: center; }
+.set-sub { margin-top: 6px; padding-top: 10px; border-top: 1px solid #3a3a3a; color: #dedede; font-weight: 600; }
+.tg-chats { display: flex; flex-wrap: wrap; gap: 6px; }
+.tg-chats button { padding: 3px 8px; border: 1px solid #454545; border-radius: 4px; }
+.tg-chats button:hover { border-color: #d97757; color: #d97757; }
+.tg-status { margin-right: auto; align-self: center; font-size: 11px; color: #9a9a9a; }

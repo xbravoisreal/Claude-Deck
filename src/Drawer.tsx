@@ -47,6 +47,7 @@ export default function Drawer({ initialTab, tasks, names, onApprove, onRework, 
               <div className="drawer-title">{t.title}</div>
               <div className="d">{when(t.created)} · {t.id}</div>
               {t.summary && <div className="drawer-sum">{t.summary}</div>}
+              {t.status === "waiting" && t.ask && <div className="drawer-sum">{t.ask}</div>}
               {note?.id === t.id && (
                 <textarea autoFocus placeholder="Nhan xet de lam lai..." value={note.text} onChange={(e) => setNote({ id: t.id, text: e.target.value })} />
               )}

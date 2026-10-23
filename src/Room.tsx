@@ -114,8 +114,8 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
           <b>{dept.icon} {dept.name}</b>
           <span className="room-mission">{dept.mission}</span>
           <span className="room-pills">
-            {count("review") > 0 && <span className="pill review">{count("review")} Chờ síp</span>}
-            {count("waiting") > 0 && <span className="pill waiting">{count("waiting")} Chờ anh</span>}
+            {count("review") > 0 && <span className="pill review">{count("review")} Chờ síp duyệt</span>}
+            {count("waiting") > 0 && <span className="pill waiting">{count("waiting")} Chờ síp trả lời</span>}
             {count("running") > 0 && <span className="pill running">{count("running")} Dang lam</span>}
             {count("backlog") > 0 && <span className="pill">{count("backlog")} hang doi</span>}
           </span>
@@ -150,7 +150,7 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
               >
                 <Sprite slot={charSlot(s.character?.replace(/^character\./, ""), a.id, pose(t))} style={{ top: px(theme.sprite.characterY) }} />
                 <Sprite slot="desk" style={{ top: px(theme.sprite.deskY) }} />
-                {t && <span className={`bubble ${t.status}`} style={{ bottom: `calc(100% + ${6 - Math.min(0, px(theme.sprite.characterY))}px)` }}>{t.status === "waiting" ? "Chờ anh" : bubble(t, tools[t.id])}</span>}
+                {t && <span className={`bubble ${t.status}`} style={{ bottom: `calc(100% + ${6 - Math.min(0, px(theme.sprite.characterY))}px)` }}>{t.status === "waiting" ? "Chờ síp trả lời" : bubble(t, tools[t.id])}</span>}
                 <span className="seat-label">
                   <b>{a.name}</b>
                   {t && <span>{t.title} · {ago(t.created)}</span>}

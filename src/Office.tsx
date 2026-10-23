@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { OfficePrefs } from "./Settings";
 import { ThemeCtx, themeVars, type Theme } from "./theme";
@@ -14,13 +15,13 @@ export type Dept = {
 export type AgentLaunch = { label: string; args: string; settings: unknown };
 export type Task = {
   id: string; dept: string; agent: string; title: string; status: "backlog" | "running" | "waiting" | "review" | "done";
-  reason: string; session: string; dir: string; cwd: string; created: number; finished: number; started: boolean; summary: string;
+  reason: string; session: string; dir: string; cwd: string; created: number; finished: number; started: boolean; summary: string; ask: string;
 };
 
 /** Chu tren bong thoai theo trang thai task (tool: ten tool dang chay, neu biet). */
 export const bubble = (t: Task, tool?: string) =>
-  t.status === "review" ? "Chờ síp"
-  : t.status === "waiting" ? `Chờ anh${t.reason ? `: ${t.reason}` : ""}`
+  t.status === "review" ? "Chờ síp duyệt"
+  : t.status === "waiting" ? `Chờ síp trả lời${t.reason ? `: ${t.reason}` : ""}`
   : t.status === "running" ? (tool ? `Dang: ${tool}` : `Dang: ${t.title}`)
   : "";
 
@@ -42,6 +43,11 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
     reload();
     invoke<Theme>("theme_load", { root: prefs.root, name: prefs.theme }).then(setTheme, (e) => setError(String(e)));
   }, [prefs.root, prefs.theme]);
+  // Bot Telegram doi du an cua phong (/duan) -> ve lai ke sach.
+  useEffect(() => {
+    const off = listen("office-depts-changed", () => prefs.root && reload());
+    return () => void off.then((f) => f());
+  }, [prefs.root]);
 
   const pickWorkspace = async (d: Dept) => {
     const dir = await open({ directory: true });

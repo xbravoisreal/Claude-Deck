@@ -32,13 +32,9 @@ fn signal_port(app: &AppHandle) -> u16 {
         let app = app.clone();
         std::thread::spawn(move || {
             for mut stream in listener.incoming().flatten() {
-                let mut buf = [0u8; 512];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                let req = String::from_utf8_lossy(&buf[..n]);
-                // "GET /<id>/<stop|notify> HTTP/1.1" -> payload = loai hook
-                if let Some(p) = req.split_whitespace().nth(1).map(|p| p.trim_start_matches('/')) {
-                    let (id, kind) = p.split_once('/').unwrap_or((p, "stop"));
-                    let _ = app.emit(&format!("claude-signal-{id}"), kind);
+                // Hook Notification gui kem JSON (message: xin quyen hay chi ranh) qua than request.
+                if let Some((id, kind, message)) = parse_signal(&read_request(&mut stream)) {
+                    let _ = app.emit(&format!("claude-signal-{id}"), serde_json::json!({ "kind": kind, "message": message }));
                 }
                 let _ = stream.write_all(RESP);
             }
@@ -50,10 +46,7 @@ fn signal_port(app: &AppHandle) -> u16 {
 /// Ghi file settings chua hook Stop + Notification tro ve signal server (gop vao `extra`), tra ve duong dan.
 fn hook_settings(app: &AppHandle, id: &str, extra: Option<serde_json::Value>) -> Result<String, String> {
     let port = signal_port(app);
-    let hook = |kind: &str| {
-        let cmd = format!("curl.exe -s -m 2 http://127.0.0.1:{port}/{id}/{kind}");
-        serde_json::json!([{ "hooks": [{ "type": "command", "command": cmd }] }])
-    };
+    let hook = |kind: &str| serde_json::json!([{ "hooks": [{ "type": "command", "command": hook_cmd(port, id, kind) }] }]);
     let mut settings = extra.filter(|v| v.is_object()).unwrap_or_else(|| serde_json::json!({}));
     settings["hooks"] = serde_json::json!({ "Stop": hook("stop"), "Notification": hook("notify") });
     let path = std::env::temp_dir().join(format!("claudedeck-hooks-{id}.json"));
@@ -61,9 +54,23 @@ fn hook_settings(app: &AppHandle, id: &str, extra: Option<serde_json::Value>) ->
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// curl doc JSON cua hook tu stdin va gui len server. `"@-"` phai co nhay: claude co the chay hook bang
+/// PowerShell, ma `@-` tran la loi cu phap o do (hook chet im, task khong bao gio sang Cho sip).
+fn hook_cmd(port: u16, id: &str, kind: &str) -> String {
+    format!("curl.exe -s -m 2 --data-binary \"@-\" http://127.0.0.1:{port}/{id}/{kind}")
+}
+
 /// Chuoi nhay don cua PowerShell: `'` trong chuoi viet thanh `''`.
+/// PowerShell coi ca ‘ ’ ‚ ‛ la nhay don nen cung viet doi (dien thoai hay tu doi ' thanh ’).
 pub fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    let mut out = String::from("'");
+    for c in s.chars() {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            out.push(c);
+        }
+        out.push(c);
+    }
+    out + "'"
 }
 
 /// kind = "chat": chay `claude` trong PowerShell. kind = "shell": PowerShell thuong.
@@ -150,6 +157,96 @@ pub fn pty_resize(state: State<Sessions>, id: String, cols: u16, rows: u16) -> R
             .map_err(err)?;
     }
     Ok(())
+}
+
+/// "<METHOD> /<id>[/<kind>] HTTP/1.1 ... \r\n\r\n<json hook>" -> (id, kind, message). Khong co kind = stop.
+/// message: Notification co san; Stop thi lay cau tra loi cuoi cua agent trong transcript.
+pub fn parse_signal(req: &str) -> Option<(String, String, String)> {
+    let path = req.lines().next()?.split_whitespace().nth(1)?.trim_start_matches('/');
+    let (id, kind) = path.split_once('/').unwrap_or((path, "stop"));
+    let body = req.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+    let v = serde_json::from_str::<serde_json::Value>(body).unwrap_or_default();
+    let msg = v["message"].as_str().map(String::from).or_else(|| v["transcript_path"].as_str().map(last_reply)).unwrap_or_default();
+    Some((id.into(), kind.into(), msg))
+}
+
+/// Chu cua tin assistant cuoi cung trong transcript JSONL (rong neu khong doc duoc).
+fn last_reply(path: &str) -> String {
+    let Ok(s) = std::fs::read_to_string(path) else { return String::new() };
+    s.lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find_map(|v| {
+            let text = (v["message"]["role"] == "assistant").then(|| v["message"]["content"].as_array()).flatten()?
+                .iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+            (!text.trim().is_empty()).then(|| text.trim().to_string())
+        })
+        .unwrap_or_default()
+}
+
+/// Doc tron mot request (header + than theo Content-Length), toi da 64KB, tong cong toi da 2s
+/// (server mot luong: client gui nho giot khong duoc giu no lau).
+fn read_request(stream: &mut std::net::TcpStream) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut data = Vec::new();
+    let mut buf = [0u8; 4096];
+    while data.len() < 65536 {
+        let Some(left) = deadline.checked_duration_since(std::time::Instant::now()).filter(|d| !d.is_zero()) else { break };
+        let _ = stream.set_read_timeout(Some(left));
+        let n = match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        data.extend_from_slice(&buf[..n]);
+        let s = String::from_utf8_lossy(&data);
+        if let Some((head, body)) = s.split_once("\r\n\r\n") {
+            let len = head
+                .lines()
+                .find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.trim().parse::<usize>().ok()))
+                .unwrap_or(0);
+            if body.len() >= len {
+                break;
+            }
+        }
+    }
+    String::from_utf8_lossy(&data).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signal_reads_body() {
+        let body = r#"{"hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}"#;
+        let req = format!("POST /abc-chat-0/notify HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        assert_eq!(parse_signal(&req), Some(("abc-chat-0".into(), "notify".into(), "Claude needs your permission to use Bash".into())));
+        assert_eq!(parse_signal("GET /abc/stop HTTP/1.1\r\n\r\n"), Some(("abc".into(), "stop".into(), String::new())));
+        assert_eq!(parse_signal("GET /abc HTTP/1.1\r\n\r\n"), Some(("abc".into(), "stop".into(), String::new())));
+        assert_eq!(parse_signal("rac"), None);
+    }
+
+    #[test]
+    fn stop_reads_last_reply_from_transcript() {
+        let p = std::env::temp_dir().join("claudedeck-test-transcript.jsonl");
+        let line = |role: &str, text: &str| serde_json::json!({ "message": { "role": role, "content": [{ "type": "text", "text": text }] } }).to_string();
+        std::fs::write(&p, [line("assistant", "cu"), line("user", "bo qua"), line("assistant", "Da, em bo qua."), r#"{"type":"system"}"#.into()].join("\n")).unwrap();
+        let body = serde_json::json!({ "hook_event_name": "Stop", "transcript_path": p }).to_string();
+        let req = format!("POST /a/stop HTTP/1.1\r\n\r\n{body}");
+        assert_eq!(parse_signal(&req).unwrap().2, "Da, em bo qua.");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn ps_quote_doubles_smart_quotes() {
+        // PowerShell coi ' ‘ ’ ‚ ‛ deu la nhay don; dien thoai hay tu doi ' thanh ’.
+        assert_eq!(ps_quote("it’s ‘x’ 'y'"), "'it’’s ‘‘x’’ ''y'''");
+    }
+
+    #[test]
+    fn hook_cmd_parses_in_powershell() {
+        assert!(hook_cmd(1, "a", "stop").contains(r#"--data-binary "@-" "#));
+    }
 }
 
 #[tauri::command]

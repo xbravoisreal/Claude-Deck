@@ -34,6 +34,12 @@ pub struct Task {
     /// Luc duyet hoac huy (millis), 0 = chua xong. Dung cho tab Lich su.
     #[serde(default)]
     pub finished: i64,
+    /// message_id tin Telegram con nut bam cua task (0 = khong co).
+    #[serde(default)]
+    pub tg_msg: i64,
+    /// Cau cuoi agent noi truoc khi dung cho sep tra loi (rong khi khong cho).
+    #[serde(default)]
+    pub ask: String,
     #[serde(default, skip_deserializing)]
     pub summary: String,
 }
@@ -138,6 +144,8 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
         started: false,
         cap_base: 0,
         finished: 0,
+        tg_msg: 0,
+        ask: String::new(),
         summary: String::new(),
     })
 }
@@ -167,10 +175,16 @@ pub fn schedule(tasks: &[Task], max_live: usize) -> Vec<String> {
 
 /// Phien ranh. stop = hook Stop (het luot): co result.md -> Cho sip, khong -> dang hoi sep.
 /// Hook Notification (xin quyen / ranh lau) giua luot -> chi waiting, khong bao gio Cho sip (tranh dong PTY khi Agent con lam).
-pub fn mark_idle(t: &mut Task, stop: bool) {
+pub fn mark_idle(t: &mut Task, stop: bool, ask: &str) {
     if live(t) {
         t.status = if stop && Path::new(&t.dir).join("result.md").exists() { "review" } else { "waiting" }.into();
         t.reason.clear();
+        // Chi Stop mang cau cuoi cua agent; Notification ("waiting for your input"...) giu cau cu.
+        if t.status != "waiting" {
+            t.ask.clear();
+        } else if stop {
+            t.ask = ask.chars().take(1000).collect();
+        }
     }
 }
 
@@ -193,6 +207,7 @@ pub fn resume_busy(t: &mut Task, cache_read: u64) {
         }
         t.status = "running".into();
         t.reason.clear();
+        t.ask.clear();
     }
 }
 
@@ -228,14 +243,14 @@ fn new_session_id() -> String {
 }
 
 /// 2 dong khong rong dau tien cua result.md (bo frontmatter).
-fn summary(dir: &str) -> String {
+pub(crate) fn summary(dir: &str) -> String {
     let Ok(s) = std::fs::read_to_string(Path::new(dir).join("result.md")) else { return String::new() };
     let body = s.strip_prefix("---").and_then(|r| r.split_once("\n---")).map_or(s.as_str(), |(_, b)| b);
-    body.lines().map(str::trim).filter(|l| !l.is_empty()).take(2).collect::<Vec<_>>().join("\n")
+    body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("```")).take(2).collect::<Vec<_>>().join("\n")
 }
 
 /// Sua mot task theo id, tra ve ban sau khi sua.
-fn update(root: &str, id: &str, f: impl FnOnce(&mut Task) -> Result<(), String>) -> Result<Task, String> {
+pub(crate) fn update(root: &str, id: &str, f: impl FnOnce(&mut Task) -> Result<(), String>) -> Result<Task, String> {
     update_with(root, id, |t| f(t).map(|_| t.clone()))
 }
 
@@ -261,8 +276,8 @@ pub fn task_create(root: String, dept: String, agent: String, title: String, bod
 }
 
 #[tauri::command]
-pub fn task_idle(root: String, id: String, stop: bool) -> Result<Task, String> {
-    update(&root, &id, |t| Ok(mark_idle(t, stop)))
+pub fn task_idle(root: String, id: String, stop: bool, message: String) -> Result<Task, String> {
+    update(&root, &id, |t| Ok(mark_idle(t, stop, &message)))
 }
 
 #[tauri::command]
@@ -406,10 +421,15 @@ pub fn task_start_next(root: String, max_live: usize, notes_root: Option<String>
 /// Mo lai phien cua task da dong (Cho sip, app vua mo lai...): khong doi trang thai.
 /// Task chua tung chay duoc (khoi chay loi) -> chay moi tu dau.
 #[tauri::command]
-pub fn task_resume(root: String, id: String, notes_root: Option<String>) -> Result<Started, String> {
+pub fn task_resume(root: String, id: String, notes_root: Option<String>, prompt: Option<String>) -> Result<Started, String> {
     let depts = load_office(Path::new(&root));
     update_with(&root, &id, |t| {
         let mut s = start(&depts, t, t.started, notes_root.as_deref())?;
+        // Mo lai phien kem cau tra loi cua sep (tu Telegram). Prompt dung dau; "-..." se bi claude doc thanh option.
+        if let Some(p) = prompt.as_deref().map(str::trim).filter(|p| t.started && !p.is_empty()) {
+            let p = if p.starts_with('-') { format!("Sep: {p}") } else { p.to_string() };
+            s.args = format!("{} {}", ps_quote(&p), s.args);
+        }
         if !t.started {
             t.started = true;
             t.status = "running".into();
@@ -482,6 +502,8 @@ mod tests {
             started: false,
             cap_base: 0,
             finished: 0,
+            tg_msg: 0,
+            ask: String::new(),
             summary: String::new(),
         }
     }
@@ -554,13 +576,15 @@ mod tests {
         let root = tmp("idle");
         let mut t = task("a", "dev", "running", 1);
         t.dir = root.to_string_lossy().into_owned();
-        mark_idle(&mut t, true);
-        assert_eq!(t.status, "waiting");
+        mark_idle(&mut t, true, "Sep muon commit gi?");
+        assert_eq!((t.status.as_str(), t.ask.as_str()), ("waiting", "Sep muon commit gi?"));
+        mark_idle(&mut t, false, "Claude is waiting for your input"); // thong bao chung khong de cau hoi that
+        assert_eq!(t.ask, "Sep muon commit gi?");
         fs::write(root.join("result.md"), "xong").unwrap();
-        mark_idle(&mut t, true);
+        mark_idle(&mut t, true, "");
         assert_eq!(t.status, "review");
         t.status = "done".into();
-        mark_idle(&mut t, true); // tin hieu tre khong keo task da duyet ve
+        mark_idle(&mut t, true, ""); // tin hieu tre khong keo task da duyet ve
         assert_eq!(t.status, "done");
         let _ = fs::remove_dir_all(&root);
     }
@@ -591,7 +615,7 @@ mod tests {
         assert!(!root.join("result.md").exists());
         assert!(root.join("result.prev.md").exists());
         t.status = "running".into();
-        mark_idle(&mut t, true);
+        mark_idle(&mut t, true, "");
         assert_eq!(t.status, "waiting");
         assert!(rework(&mut t, "x").is_err());
         let _ = fs::remove_dir_all(&root);
@@ -624,9 +648,9 @@ mod tests {
         fs::write(root.join("result.md"), "xong").unwrap();
         let mut t = task("a", "dev", "running", 1);
         t.dir = root.to_string_lossy().into_owned();
-        mark_idle(&mut t, false); // xin quyen giua chung, result.md co tu truoc
+        mark_idle(&mut t, false, ""); // xin quyen giua chung, result.md co tu truoc
         assert_eq!(t.status, "waiting");
-        mark_idle(&mut t, true);
+        mark_idle(&mut t, true, "");
         assert_eq!(t.status, "review");
         let _ = fs::remove_dir_all(&root);
     }
@@ -658,10 +682,13 @@ mod tests {
         office_set_workspace(r.clone(), "software-dev".into(), d.config.workspace.clone()).unwrap();
         let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "".into(), None).unwrap();
         task_stop_any(&r, &t.id); // gia lap khoi chay loi: waiting, started=false
-        let s = task_resume(r.clone(), t.id.clone(), None).unwrap();
-        assert!(s.args.contains("--session-id") && !s.args.contains("--resume"), "{}", s.args);
+        let s = task_resume(r.clone(), t.id.clone(), None, Some("bo qua".into())).unwrap();
+        assert!(s.args.contains("--session-id") && !s.args.contains("bo qua"), "{}", s.args); // chua chay: prompt goc, bo cau tra loi
         let t = load_tasks(Path::new(&r)).unwrap().into_iter().next().unwrap();
         assert!(t.started && t.status == "running");
+        // Da chay: mo lai phien, cau tra loi dung dau (truoc option nhieu gia tri)
+        let s = task_resume(r.clone(), t.id.clone(), None, Some("-commit readme".into())).unwrap();
+        assert!(s.args.starts_with(&format!("'Sep: -commit readme' --resume {}", t.session)), "{}", s.args);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -746,6 +773,9 @@ mod tests {
         let root = tmp("summary");
         fs::write(root.join("result.md"), "---\ntask: a\n---\n\nDong 1\n\nDong 2\nDong 3").unwrap();
         assert_eq!(summary(&root.to_string_lossy()), "Dong 1\nDong 2");
+        // Tom tat di ra Telegram: bo dong rao code.
+        fs::write(root.join("result.md"), "```rust\nDong A\n```\nDong B").unwrap();
+        assert_eq!(summary(&root.to_string_lossy()), "Dong A\nDong B");
         let _ = fs::remove_dir_all(&root);
     }
 
