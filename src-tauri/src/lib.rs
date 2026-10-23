@@ -1,6 +1,7 @@
 mod accounts;
 mod clip;
 mod history;
+mod hr;
 mod office;
 mod pty;
 mod tasks;
@@ -42,6 +43,11 @@ pub fn run() {
             office::office_launch,
             office::office_create_department,
             office::office_set_agent_status,
+            hr::hr_candidates,
+            hr::hr_request,
+            hr::hr_revise,
+            hr::hr_hire,
+            hr::hr_reject,
             tasks::task_list,
             tasks::task_create,
             tasks::task_idle,
