@@ -213,3 +213,6 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .cand-prob.bad { border-color: var(--o-warn); }
 .cand-result { white-space: pre-wrap; max-height: 4.2em; overflow: hidden; color: var(--o-text); }
 .new-room textarea { min-height: 70px; }
+.cand-result { cursor: pointer; }
+.cand-result.open { max-height: none; }
+.cand-prob a { color: var(--o-accent); cursor: pointer; text-decoration: underline; }

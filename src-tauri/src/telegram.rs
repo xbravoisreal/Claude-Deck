@@ -573,6 +573,16 @@ pub fn tg_notify(id: String, kind: String) {
 }
 
 /// Task da xu ly tren app -> sua tin con nut thanh `text`, bo nut.
+/// Tin thong bao khong nut (vd thu viec xong). Chua cau hinh bot thi bo qua.
+pub fn tg_say(text: String) {
+    std::thread::spawn(move || {
+        let Ok(c) = cfg() else { return };
+        if let Err(e) = send(&c, &text, &Value::Null) {
+            set_status(format!("loi gui tin: {e}"));
+        }
+    });
+}
+
 #[tauri::command]
 pub fn tg_resolved(id: String, text: String) {
     std::thread::spawn(move || {

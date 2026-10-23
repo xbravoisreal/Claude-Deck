@@ -195,6 +195,24 @@ pub fn hr_revise(root: String, cid: String, note: String, notes_root: Option<Str
     recruiter_task(rp, &format!("Sua ung vien {cid}"), &body, notes_root.as_deref())
 }
 
+/// Sep da Nhan/Tu choi: task Recruiter dang cho duyet ma result.md nhac toi ung vien nay coi nhu xong.
+fn close_recruiter_tasks(root: &Path, cid: &str, text: &str) {
+    let closed = with_tasks(root, |ts| {
+        let mut ids = vec![];
+        for t in ts.iter_mut().filter(|t| t.dept == "hr" && t.status == "review") {
+            let result = std::fs::read_to_string(Path::new(&t.dir).join("result.md")).unwrap_or_default();
+            if t.title.contains(cid) || result.contains(cid) {
+                crate::tasks::approve(t)?;
+                ids.push(t.id.clone());
+            }
+        }
+        Ok(ids)
+    });
+    for id in closed.unwrap_or_default() {
+        crate::telegram::tg_resolved(id, text.into());
+    }
+}
+
 /// Chuyen ho so vao `_hired`/`_rejected` (khong xoa).
 fn archive(root: &Path, cid: &str, to: &str) -> Result<(), String> {
     let base = candidates_dir(root);
@@ -246,7 +264,9 @@ pub fn hr_hire(root: String, cid: String) -> Result<(), String> {
         let _ = std::fs::remove_file(&file); // file vua tao o tren, chua ai dung
         return Err(e);
     }
-    archive(rp, &cid, "_hired")
+    archive(rp, &cid, "_hired")?;
+    close_recruiter_tasks(rp, &cid, "✅ Đã nhận ứng viên");
+    Ok(())
 }
 
 #[tauri::command]
@@ -256,7 +276,9 @@ pub fn hr_reject(root: String, cid: String) -> Result<(), String> {
         return Err(format!("khong co ung vien {cid}"));
     }
     idle(&cid)?;
-    archive(rp, &cid, "_rejected")
+    archive(rp, &cid, "_rejected")?;
+    close_recruiter_tasks(rp, &cid, "Đã từ chối ứng viên");
+    Ok(())
 }
 
 const PROBATION_PROMPT: &str = "Lam viec mo ta trong file sample-task.md o thu muc hien tai.";
@@ -396,7 +418,27 @@ fn run_probation(root: &Path, cid: &str) -> Result<Probation, String> {
 
 #[tauri::command]
 pub async fn hr_probation(root: String, cid: String) -> Result<Probation, String> {
-    tauri::async_runtime::spawn_blocking(move || run_probation(Path::new(&root), &cid)).await.map_err(err)?
+    let p = tauri::async_runtime::spawn_blocking({
+        let (root, cid) = (root.clone(), cid.clone());
+        move || run_probation(Path::new(&root), &cid)
+    })
+    .await
+    .map_err(err)??;
+    let c = read_candidate(Path::new(&root), &candidates_dir(Path::new(&root)).join(&cid), &cid);
+    let name = c.agent.map_or(cid.clone(), |a| a.name);
+    crate::telegram::tg_say(format!(
+        "{} <b>Thử việc {}</b> · <b>{}</b> → {}
+{}
+{}Mở ClaudeDeck → phòng HR để Nhận / Từ chối.",
+        if p.ok { "🧪" } else { "⚠️" },
+        if p.ok { "xong" } else { "lỗi" },
+        crate::telegram::escape(&name),
+        crate::telegram::escape(&c.dept),
+        crate::telegram::escape(&clip(&p.result, 300)),
+        if p.files.is_empty() { String::new() } else { format!("File: {}
+", crate::telegram::escape(&p.files.join(", "))) },
+    ));
+    Ok(p)
 }
 
 #[cfg(test)]
@@ -556,6 +598,27 @@ mod tests {
         let hired: Vec<_> = fs::read_dir(candidates_dir(&root).join("_hired")).unwrap().flatten().collect();
         assert_eq!(hired.len(), 1);
         assert!(hired[0].path().join("agent.md").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn decision_closes_recruiter_review_task() {
+        let root = tmp("close");
+        let r = root.to_string_lossy().to_string();
+        let mut ids = vec![];
+        for cid in ["writer", "other"] {
+            candidate(&root, cid, "software-dev", MD);
+            let t = hr_request(r.clone(), "software-dev".into(), "viet changelog".into(), None).unwrap();
+            fs::write(Path::new(&t.dir).join("result.md"), format!("Ung vien: {cid}\nxong")).unwrap();
+            crate::tasks::update(&r, &t.id, |t| Ok(t.status = "review".into())).unwrap();
+            ids.push(t.id);
+        }
+        hr_hire(r.clone(), "writer".into()).unwrap();
+        let status = |id: &str| crate::tasks::load_tasks(&root).unwrap().into_iter().find(|t| t.id == id).unwrap().status;
+        assert_eq!(status(&ids[0]), "done");
+        assert_eq!(status(&ids[1]), "review"); // ung vien khac: giu nguyen
+        hr_reject(r, "other".into()).unwrap();
+        assert_eq!(status(&ids[1]), "done");
         let _ = fs::remove_dir_all(&root);
     }
 

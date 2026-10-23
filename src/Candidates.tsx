@@ -13,6 +13,8 @@ export default function Candidates({ root, notes, depts, tick, onTasks, onHired 
   const [busy, setBusy] = useState<Record<string, string>>({});
   const [note, setNote] = useState<{ id: string; text: string } | null>(null);
   const [error, setError] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
+  const reveal = (path: string) => invoke("open_in_editor", { path }).catch((e) => setError(String(e)));
 
   const load = () => invoke<Candidate[]>("hr_candidates", { root }).then(setList, (e) => setError(String(e)));
   // tick: danh sach task doi (Recruiter vua xong) -> doc lai ho so.
@@ -59,8 +61,13 @@ export default function Candidates({ root, notes, depts, tick, onTasks, onHired 
                 : !p ? "Chưa thử việc"
                 : <>
                     <span>{p.ok ? "✅ Thử việc xong" : "⚠️ Thử việc lỗi"} · {p.turns} lượt · {Math.round(p.tokens / 1000)}K token · ${p.cost.toFixed(3)}</span>
-                    <span className="cand-result">{p.result}</span>
-                    {p.files.length > 0 && <span className="d">File tạo ra: {p.files.join(", ")}</span>}
+                    <span className={`cand-result${open === c.id ? " open" : ""}`} title="Bấm để xem đủ / thu gọn" onClick={() => setOpen(open === c.id ? null : c.id)}>{p.result}</span>
+                    {p.files.length > 0 && (
+                      <span className="d">
+                        <a onClick={() => reveal(`${root}\hr\probation\${c.id}`)}>File tạo ra</a>:{" "}
+                        {p.files.map((f, i) => <span key={f}>{i > 0 && ", "}<a onClick={() => reveal(`${root}\hr\probation\${c.id}\${f}`)}>{f}</a></span>)}
+                      </span>
+                    )}
                     {p.denied.length > 0 && <span className="d">Bị chặn: {p.denied.join(", ")}</span>}
                   </>}
             </div>
@@ -76,8 +83,8 @@ export default function Candidates({ root, notes, depts, tick, onTasks, onHired 
               <div className="set-actions">
                 <button disabled={!!b || !c.agent} onClick={() => run(c.id, "probation", () => invoke("hr_probation", { root, cid: c.id }))}>Thử việc</button>
                 <button disabled={!!b} onClick={() => setNote({ id: c.id, text: "" })}>Sửa</button>
-                <button disabled={!!b} onClick={() => run(c.id, "reject", () => invoke("hr_reject", { root, cid: c.id }))}>Từ chối</button>
-                <button className="primary" disabled={!!b || !!c.error} onClick={() => run(c.id, "hire", () => invoke("hr_hire", { root, cid: c.id }).then(onHired))}>Nhận</button>
+                <button disabled={!!b} onClick={() => run(c.id, "reject", () => invoke("hr_reject", { root, cid: c.id }).then(onTasks))}>Từ chối</button>
+                <button className="primary" disabled={!!b || !!c.error} onClick={() => run(c.id, "hire", () => invoke("hr_hire", { root, cid: c.id }).then(() => (onHired(), onTasks())))}>Nhận</button>
               </div>
             )}
           </div>
