@@ -32,6 +32,33 @@ pub struct DeptConfig {
     /// vd {"maxTokens": 4000000}
     #[serde(default)]
     pub defaults: serde_json::Value,
+    /// Chon model theo loai task (luat dau tien khop thang); khong luat nao khop -> model trong file Agent.
+    #[serde(default)]
+    pub router: Vec<Route>,
+}
+
+/// vd {"agent": "dev", "match": ["typo", "readme"], "model": "haiku"}; agent rong = moi Agent cua phong.
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct Route {
+    #[serde(default)]
+    pub agent: String,
+    #[serde(rename = "match")]
+    pub keywords: Vec<String>,
+    pub model: String,
+}
+
+/// Ten model di vao frontmatter plugin: alias (haiku, sonnet, opus) hoac id day du (claude-...).
+pub fn valid_model(m: &str) -> bool {
+    !m.is_empty() && m.len() <= 60 && m.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
+}
+
+/// Model cho task moi theo router cua phong ("" = model mac dinh cua Agent). So khop chu thuong, chua tu khoa.
+pub fn route(c: &DeptConfig, agent: &str, text: &str) -> String {
+    let text = text.to_lowercase();
+    c.router
+        .iter()
+        .find(|r| (r.agent.is_empty() || r.agent == agent) && valid_model(&r.model) && r.keywords.iter().map(|k| k.trim().to_lowercase()).any(|k| !k.is_empty() && text.contains(&k)))
+        .map_or(String::new(), |r| r.model.clone())
 }
 
 #[derive(Serialize, Clone)]
@@ -423,8 +450,15 @@ pub fn launch_spec(d: &Department, agent_id: &str, plugin_dir: &Path, notes_root
 }
 
 /// Ghi plugin tam cua phong + thu muc notes, roi dung tham so khoi chay.
-pub fn prepare_launch(d: &Department, agent: &str, notes_root: Option<&str>) -> Result<LaunchSpec, String> {
-    let dir = std::env::temp_dir().join(format!("claudedeck-plugin-{}", d.config.id));
+/// `model` khac model cua Agent (router / sep chon) -> plugin rieng chi doi model cua Agent chinh, subagent giu nguyen.
+pub fn prepare_launch(d: &Department, agent: &str, notes_root: Option<&str>, model: &str) -> Result<LaunchSpec, String> {
+    let mut d = d.clone();
+    let mut dir = std::env::temp_dir().join(format!("claudedeck-plugin-{}", d.config.id));
+    if let Some(a) = d.agent_defs.iter_mut().find(|a| a.id == agent && valid_model(model) && a.model.as_deref() != Some(model)) {
+        a.model = Some(model.into());
+        dir = std::env::temp_dir().join(format!("claudedeck-plugin-{}-{agent}-{model}", d.config.id));
+    }
+    let d = &d;
     write_plugin(d, &dir).map_err(err)?;
     if let Some(n) = notes_root.filter(|n| !n.is_empty()) {
         std::fs::create_dir_all(Path::new(n).join("ClaudeDeck")).map_err(err)?;
@@ -435,7 +469,7 @@ pub fn prepare_launch(d: &Department, agent: &str, notes_root: Option<&str>) -> 
 #[tauri::command]
 pub fn office_launch(root: String, dept: String, agent: String, notes_root: Option<String>) -> Result<LaunchSpec, String> {
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept).ok_or(format!("khong co phong {dept}"))?;
-    prepare_launch(&d, &agent, notes_root.as_deref())
+    prepare_launch(&d, &agent, notes_root.as_deref(), "")
 }
 
 #[cfg(test)]
@@ -596,6 +630,27 @@ mod tests {
         assert_eq!(d.room["workspace"]["w"], 3);
         assert!(office_create_department(r.clone(), "content media".into(), "".into(), "".into(), None).is_err()); // trung
         assert!(office_create_department(r, "!!!".into(), "".into(), "".into(), None).is_err()); // ten rong sau khi lam sach
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn router_picks_first_match_and_plugin_carries_model() {
+        let mut c = DeptConfig::default();
+        let rule = |agent: &str, k: &[&str], m: &str| Route { agent: agent.into(), keywords: k.iter().map(|s| s.to_string()).collect(), model: m.into() };
+        c.router = vec![rule("qa", &["typo"], "opus"), rule("", &["Typo", "README"], "haiku"), rule("", &["x"], "Bad Model;")];
+        assert_eq!(route(&c, "dev", "Sua TYPO trong readme"), "haiku");
+        assert_eq!(route(&c, "qa", "sua typo"), "opus");
+        assert_eq!(route(&c, "dev", "lam tinh nang moi"), "");
+        assert_eq!(route(&c, "dev", "x"), ""); // model la bi bo qua
+        let root = tmp("router");
+        seed_office(&root).unwrap();
+        let d = load_office(&root).into_iter().find(|d| d.config.id == "software-dev").unwrap();
+        let s = prepare_launch(&d, "dev", None, "haiku").unwrap();
+        let dir = std::env::temp_dir().join("claudedeck-plugin-software-dev-dev-haiku");
+        assert!(s.args.contains("claudedeck-plugin-software-dev-dev-haiku"), "{}", s.args);
+        assert!(fs::read_to_string(dir.join("agents/dev.md")).unwrap().contains("model: haiku"));
+        assert!(fs::read_to_string(dir.join("agents/qa.md")).unwrap().contains("model: sonnet")); // subagent giu model
+        assert!(!prepare_launch(&d, "dev", None, "").unwrap().args.contains("-dev-")); // khong chon -> plugin chung
         fs::remove_dir_all(&root).unwrap();
     }
 

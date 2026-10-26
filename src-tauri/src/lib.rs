@@ -5,6 +5,7 @@ mod hr;
 mod office;
 mod pty;
 mod routines;
+mod stats;
 mod tasks;
 mod telegram;
 mod theme;
@@ -79,6 +80,8 @@ pub fn run() {
             telegram::tg_resolved,
             theme::theme_load,
             theme::theme_list,
+            stats::office_stats,
+            hr::hr_review,
             routines::routine_list,
             routines::routine_save,
             routines::routine_delete,

@@ -7,5 +7,6 @@
   "lead": "strategist",
   "agents": ["strategist", "scriptwriter", "video-editor", "social-poster", "analyst"],
   "status": { "strategist": "active", "scriptwriter": "active", "video-editor": "active", "social-poster": "active", "analyst": "active" },
-  "defaults": { "maxTokens": 4000000 }
+  "defaults": { "maxTokens": 4000000 },
+  "router": [{"agent": "social-poster", "match": ["caption", "hashtag"], "model": "haiku"}]
 }

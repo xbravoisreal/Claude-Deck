@@ -411,7 +411,7 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
         }
         Action::Assign(dept, agent, text) => {
             let title = clip(text.lines().next().unwrap_or(""), 80);
-            match tasks::task_create(c.root.clone(), dept, agent, title, text, Some(c.notes.clone())) {
+            match tasks::task_create(c.root.clone(), dept, agent, title, text, Some(c.notes.clone()), None) {
                 Ok(t) => {
                     answer(c, &qid, "Đã giao");
                     let (agent, dept) = names(&c.root, &t);

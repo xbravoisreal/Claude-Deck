@@ -42,6 +42,9 @@ pub struct Task {
     pub ask: String,
     #[serde(default, skip_deserializing)]
     pub summary: String,
+    /// Model chay task (router cua phong hoac sep chon); "" = model trong file Agent.
+    #[serde(default)]
+    pub model: String,
 }
 
 fn err<E: ToString>(e: E) -> String {
@@ -163,6 +166,8 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
         tg_msg: 0,
         ask: String::new(),
         summary: String::new(),
+        model: crate::office::route(&d.config, agent, &format!("{title}
+{body}")),
     })
 }
 
@@ -284,9 +289,16 @@ pub fn task_list(root: String) -> Result<Vec<Task>, String> {
 }
 
 #[tauri::command]
-pub fn task_create(root: String, dept: String, agent: String, title: String, body: String, notes_root: Option<String>) -> Result<Task, String> {
+pub fn task_create(root: String, dept: String, agent: String, title: String, body: String, notes_root: Option<String>, model: Option<String>) -> Result<Task, String> {
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept).ok_or(format!("khong co phong {dept}"))?;
-    let t = create_task(&d, &agent, &title, &body, notes_root.as_deref())?;
+    let model = model.filter(|m| !m.is_empty());
+    if model.as_deref().is_some_and(|m| !crate::office::valid_model(m)) {
+        return Err(format!("model khong hop le: {}", model.unwrap_or_default()));
+    }
+    let mut t = create_task(&d, &agent, &title, &body, notes_root.as_deref())?;
+    if let Some(m) = model {
+        t.model = m; // sep chon tay thang router
+    }
     with_tasks(Path::new(&root), |ts| {
         // Cho nghi chen vao giua create_task va luc ghi: kiem tra lai trong khoa.
         let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept);
@@ -360,7 +372,7 @@ pub fn task_args(t: &Task, reopen: bool) -> String {
 fn start(depts: &[Department], t: &Task, reopen: bool, notes: Option<&str>) -> Result<Started, String> {
     let d = depts.iter().find(|d| d.config.id == t.dept).ok_or(format!("khong co phong {}", t.dept))?;
     let name = d.agent_defs.iter().find(|a| a.id == t.agent).map_or(t.agent.as_str(), |a| a.name.as_str());
-    let l = prepare_launch(d, &t.agent, notes)?;
+    let l = prepare_launch(d, &t.agent, notes, &t.model)?;
     Ok(Started {
         task: t.clone(),
         label: format!("{} {name} · {}", d.config.icon, t.title),
@@ -529,6 +541,7 @@ mod tests {
             tg_msg: 0,
             ask: String::new(),
             summary: String::new(),
+            model: String::new(),
         }
     }
 
@@ -772,7 +785,7 @@ mod tests {
         let (root, _ws, d) = setup("resume0", true);
         let r = root.join("office").to_string_lossy().to_string();
         office_set_workspace(r.clone(), "software-dev".into(), d.config.workspace.clone()).unwrap();
-        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "".into(), None).unwrap();
+        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "".into(), None, None).unwrap();
         task_stop_any(&r, &t.id); // gia lap khoi chay loi: waiting, started=false
         let s = task_resume(r.clone(), t.id.clone(), None, Some("bo qua".into())).unwrap();
         assert!(s.args.contains("--session-id") && !s.args.contains("bo qua"), "{}", s.args); // chua chay: prompt goc, bo cau tra loi
@@ -820,7 +833,7 @@ mod tests {
         let office = root.join("office");
         let r = office.to_string_lossy().to_string();
         office_set_workspace(r.clone(), "software-dev".into(), d.config.workspace.clone()).unwrap();
-        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "y".into(), None).unwrap();
+        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "y".into(), None, None).unwrap();
         let s = task_start_next(r.clone(), 3, None).unwrap();
         assert_eq!(s.len(), 1);
         assert!(s[0].args.contains("--agent 'office:dev'") && s[0].args.contains(&format!("--session-id {}", t.session)), "{}", s[0].args);

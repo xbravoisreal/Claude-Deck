@@ -180,6 +180,37 @@ Chi ghi trong `{cand}`. Mo ho thi hoi sep truoc. Xong thi ghi result.md nhu moi 
     recruiter_task(rp, &format!("Tuyen: {}", clip(&need, 60)), &body, notes_root.as_deref())
 }
 
+/// Bang thong ke (markdown) cho Recruiter danh gia. Token tinh theo nghin.
+pub fn review_table(root: &Path, rows: &[crate::stats::AgentStats]) -> String {
+    let depts = load_office(root);
+    let mut s = String::from("| Phong | Agent | Trang thai | Task | Duyet | Huy | Dang mo | Lam lai | Luot | Doc cache (K) | Output (K) | Model |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n");
+    for r in rows {
+        let status = depts.iter().find(|d| d.config.id == r.dept).map_or("?", |d| crate::office::agent_status(&d.config, &r.agent));
+        let models: Vec<String> = r.by_model.iter().map(|(m, u)| format!("{m} {}K", u.cache_read / 1000)).collect();
+        s += &format!(
+            "| {} | {} | {status} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            r.dept, r.agent, r.tasks, r.approved, r.cancelled, r.open, r.reworks, r.total.turns, r.total.cache_read / 1000, r.total.output / 1000, models.join(", ")
+        );
+    }
+    s
+}
+
+/// Nut "HR danh gia" tren bang thong ke: Recruiter doc so lieu va viet bao cao, khong tu sua Agent.
+#[tauri::command]
+pub async fn hr_review(root: String, notes_root: Option<String>) -> Result<Task, String> {
+    let rows = crate::stats::office_stats(root.clone()).await?;
+    let rp = Path::new(&root);
+    let body = format!(
+        "## Danh gia dinh ky\nSo lieu tu ClaudeDeck (moi task tu truoc toi nay; token cua subagent tinh cho Agent lam subagent):\n\n{}\n\
+Viet bao cao vao result.md (2 dong dau: tom tat): Agent nao tot, Agent nao ton token / bi lam lai / bi huy nhieu va vi sao \
+(doc brief.md, result.md cua task neu can), de xuat cu the: sua prompt, doi model trong file Agent hoac router cua phong, \
+cho nghi, hoac tuyen them. Chi de xuat; khong sua file Agent hay department.json. Ghi trong `{}` neu can file nhap.\n",
+        review_table(rp, &rows),
+        candidates_dir(rp).to_string_lossy()
+    );
+    recruiter_task(rp, "Danh gia Agent dinh ky", &body, notes_root.as_deref())
+}
+
 /// Sep bam "Sua" tren the ung vien: Recruiter sua tai cho theo nhan xet.
 #[tauri::command]
 pub fn hr_revise(root: String, cid: String, note: String, notes_root: Option<String>) -> Result<Task, String> {

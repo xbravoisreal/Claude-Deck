@@ -7,6 +7,7 @@ import { ThemeCtx, themeVars, type Theme } from "./theme";
 import Room from "./Room";
 import AgentPanel from "./AgentPanel";
 import Candidates from "./Candidates";
+import Stats from "./Stats";
 
 export type AgentDef = { id: string; name: string; description: string; tools: string[]; model: string | null };
 export type Dept = {
@@ -17,7 +18,7 @@ export type Template = { id: string; name: string; icon: string; mission: string
 export type AgentLaunch = { label: string; args: string; settings: unknown };
 export type Task = {
   id: string; dept: string; agent: string; title: string; status: "backlog" | "running" | "waiting" | "review" | "done";
-  reason: string; session: string; dir: string; cwd: string; created: number; finished: number; started: boolean; summary: string; ask: string;
+  reason: string; session: string; dir: string; cwd: string; created: number; finished: number; started: boolean; summary: string; ask: string; model: string;
 };
 
 /** Chu tren bong thoai theo trang thai task (tool: ten tool dang chay, neu biet). */
@@ -38,6 +39,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
   const [panel, setPanel] = useState<{ dept: string; agent: string } | null>(null);
   const [newRoom, setNewRoom] = useState<{ name: string; icon: string; mission: string; template: string; askHr: boolean } | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [stats, setStats] = useState(false);
   const [hire, setHire] = useState<{ dept: Dept; need: string } | null>(null);
 
   const reload = () =>
@@ -70,9 +72,9 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
       onOpen(cwd, { label: `${d.icon} ${a.name}`, ...spec });
     });
 
-  const assign = async (d: Dept, a: AgentDef, title: string, body: string) => {
+  const assign = async (d: Dept, a: AgentDef, title: string, body: string, model: string) => {
     if (!d.workspace && !(await pickWorkspace(d))) return;
-    await invoke("task_create", { root: prefs.root, dept: d.id, agent: a.id, title, body, notesRoot: prefs.notes || null }).catch((e) => {
+    await invoke("task_create", { root: prefs.root, dept: d.id, agent: a.id, title, body, notesRoot: prefs.notes || null, model: model || null }).catch((e) => {
       setError(String(e));
       throw e;
     });
@@ -186,6 +188,9 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
           </div>
         )}
         <button className="room-add" title="Mo phong moi" onClick={openNewRoom}>+</button>
+        <button className="room-add room-stats" title="Thống kê Agent" onClick={() => setStats(!stats)}>📊</button>
+        {stats && <div className="drawer-backdrop" onClick={() => setStats(false)} />}
+        {stats && <Stats root={prefs.root} notes={prefs.notes} depts={depts} onTasks={onTasks} onClose={() => setStats(false)} />}
         {pd && pa && <div className="drawer-backdrop" onClick={() => setPanel(null)} />}
         {pd && pa && (
           <AgentPanel
@@ -196,7 +201,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
             dept={pd}
             agent={pa}
             tasks={tasks}
-            onAssign={(title, body) => assign(pd, pa, title, body)}
+            onAssign={(title, body, model) => assign(pd, pa, title, body, model)}
             onLaunch={() => launch(pd, pa)}
             onEdit={() => reveal(`${prefs.root}\\departments\\${pd.id}\\agents\\${pa.id}.md`)}
             onStatus={(s) => setStatus(pd, pa, s)}

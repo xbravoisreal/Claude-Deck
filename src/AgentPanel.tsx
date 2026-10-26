@@ -12,14 +12,14 @@ const when = (r: Routine) => `${r.at} ${r.days.length === 0 || r.days.length ===
 
 export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, onLaunch, onEdit, onStatus, onTasks, onClose }: {
   root: string; notes: string; dept: Dept; agent: AgentDef; tasks: Task[]; onTasks: () => void;
-  onAssign: (title: string, body: string) => Promise<unknown>; onLaunch: () => void; onEdit: () => void;
+  onAssign: (title: string, body: string, model: string) => Promise<unknown>; onLaunch: () => void; onEdit: () => void;
   onStatus: (status: string) => Promise<unknown>; onClose: () => void;
 }) {
   const [retire, setRetire] = useState(false);
   const [error, setError] = useState("");
   const status = dept.status?.[agent.id] ?? "active";
   const change = (s: string) => onStatus(s).catch((e) => (setError(String(e)), setRetire(false)));
-  const [form, setForm] = useState<{ title: string; body: string } | null>(null);
+  const [form, setForm] = useState<{ title: string; body: string; model: string } | null>(null);
   const [sending, setSending] = useState(false);
   const mine = tasks.filter((t) => t.dept === dept.id && t.agent === agent.id).sort((a, b) => b.created - a.created);
   const budget = dept.budget?.[agent.id] ?? dept.defaults?.maxTokens ?? 4_000_000;
@@ -36,7 +36,7 @@ export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, 
     if (!form?.title.trim() || sending) return;
     setSending(true); // bam 2 lan khong tao 2 task
     try {
-      await onAssign(form.title.trim(), form.body);
+      await onAssign(form.title.trim(), form.body, form.model);
       setForm(null);
     } finally {
       setSending(false);
@@ -65,12 +65,16 @@ export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, 
         <div className="set-actions">
           <button onClick={onEdit}>Sua</button>
           <button onClick={onLaunch}>Mo phien</button>
-          <button className="primary" onClick={() => setForm({ title: "", body: "" })}>Giao viec</button>
+          <button className="primary" onClick={() => setForm({ title: "", body: "", model: "" })}>Giao viec</button>
         </div>
         {form && (
           <div className="assign">
             <input autoFocus placeholder="Tieu de task" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
             <textarea placeholder="Mo ta, tieu chi nghiem thu..." value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />
+            <select value={form.model} title="Tự động: theo router của phòng, không khớp thì model của Agent" onChange={(e) => setForm({ ...form, model: e.target.value })}>
+              <option value="">Model: tự động ({agent.model ?? "default"})</option>
+              {["haiku", "sonnet", "opus"].map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
             <div className="set-actions">
               <button onClick={() => setForm(null)}>Huy</button>
               <button className="primary" disabled={!form.title.trim() || sending} onClick={submit}>Giao</button>
@@ -115,7 +119,7 @@ export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, 
           <div key={t.id} className="ap-task">
             <span className={`bubble ${t.status}`}>{t.status === "done" ? (t.reason === "da huy" ? "Da huy" : "Da duyet") : bubble(t) || "Hang doi"}</span>
             <span className="t">{t.title}</span>
-            <span className="d">{t.id}</span>
+            <span className="d">{t.model && `${t.model} · `}{t.id}</span>
           </div>
         ))}
       </div>
