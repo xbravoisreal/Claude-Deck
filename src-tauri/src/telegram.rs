@@ -315,7 +315,7 @@ pub fn status_report(depts: &[crate::office::Department], ts: &[Task], subs: &dy
         out += "Chưa có task nào xong.
 ";
     }
-    for t in done.iter().take(8) {
+    for t in done.iter().take(5) {
         let (a, _) = name(t);
         let sum = tasks::summary(&t.dir).lines().next().unwrap_or("").to_string();
         out += &format!("✅ {} · <b>{}</b> · {}", escape(&clip(&t.title, 60)), escape(&a), ago(t.finished.max(t.created)));
