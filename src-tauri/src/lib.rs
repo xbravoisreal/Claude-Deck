@@ -52,6 +52,8 @@ pub fn run() {
             office::office_root,
             office::office_load,
             office::office_set_workspace,
+            office::office_save_order,
+            office::office_save_room,
             office::office_launch,
             office::office_create_department,
             office::office_templates,

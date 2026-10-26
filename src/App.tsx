@@ -436,6 +436,7 @@ export default function App() {
           subs={subs}
           onHistory={() => setDrawer("history")}
           onOpen={openAgent}
+          onOpenTask={openTask}
           onTasks={startNext}
           onDepts={(ds: Dept[]) => setNames(Object.fromEntries(ds.flatMap((d) => d.agent_defs.map((a) => [`${d.id}/${a.id}`, `${a.name} · ${d.name}`]))))}
         />

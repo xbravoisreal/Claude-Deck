@@ -139,7 +139,10 @@ pub fn load_office(root: &Path) -> Vec<Department> {
             Some(Department { config, agent_defs, errors, room })
         })
         .collect();
-    out.sort_by(|a, b| a.config.id.cmp(&b.config.id));
+    // Thu tu phong do nguoi dung keo (order.json); phong chua co trong danh sach xep sau, theo id.
+    let order: Vec<String> = std::fs::read_to_string(root.join("order.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let rank = |id: &str| order.iter().position(|x| x == id).unwrap_or(usize::MAX);
+    out.sort_by(|a, b| rank(&a.config.id).cmp(&rank(&b.config.id)).then_with(|| a.config.id.cmp(&b.config.id)));
     out
 }
 
@@ -344,6 +347,22 @@ pub fn edit_department(root: &Path, dept: &str, f: impl FnOnce(&mut serde_json::
 #[tauri::command]
 pub fn office_set_workspace(root: String, dept: String, workspace: String) -> Result<(), String> {
     edit_department(Path::new(&root), &dept, |v| Ok(v["workspace"] = workspace.into()))
+}
+
+/// Luu thu tu cac phong (keo bien hieu tren man Office).
+#[tauri::command]
+pub fn office_save_order(root: String, order: Vec<String>) -> Result<(), String> {
+    std::fs::write(Path::new(&root).join("order.json"), serde_json::to_string(&order).map_err(err)?).map_err(err)
+}
+
+/// Ghi room.json cua phong (keo ban Agent doi cho ngoi).
+#[tauri::command]
+pub fn office_save_room(root: String, dept: String, room: serde_json::Value) -> Result<(), String> {
+    if dept.contains(['/', '\\']) || dept.contains("..") {
+        return Err("ten phong khong hop le".into());
+    }
+    let p = Path::new(&root).join("departments").join(&dept).join("room.json");
+    std::fs::write(p, serde_json::to_string_pretty(&room).map_err(err)?).map_err(err)
 }
 
 /// Sua ten / icon / nhiem vu phong (id = ten thu muc, khong doi).

@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { Sprite, useTheme, characters, cellOf } from "./theme";
 import { bubble, type Dept, type Task, type AgentDef } from "./Office";
 
@@ -55,10 +56,17 @@ const ago = (ms: number) => {
   return m < 1 ? "vua xong" : m < 60 ? `${m} phut` : `${Math.round(m / 60)} gio`;
 };
 
-export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk, onHistory, onWorkspace, onHire, onSignMenu }: {
+const DRAG_PX = 5; // keo it hon nguong nay van tinh la bam
+
+export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk, onHistory, onWorkspace, onHire, onSignMenu, onSeats, onRoomDrop }: {
   dept: Dept; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>; delegated: string[]; warnK: number;
   onDesk: (a: AgentDef) => void; onHistory: () => void; onWorkspace: () => void; onHire: () => void; onSignMenu: (x: number, y: number) => void;
+  onSeats: (seats: Record<string, Seat>) => void; onRoomDrop: (x: number, y: number) => void;
 }) {
+  // Keo ban: tha vao o luoi gan nhat (diem neo); o co Agent khac thi doi cho, o bi chan thi tra ve cho cu.
+  const [drag, setDrag] = useState<{ id: string; dx: number; dy: number } | null>(null);
+  const start = useRef<{ id: string; x: number; y: number } | null>(null);
+  const moved = useRef(false);
   const theme = useTheme()!;
   const cell = cellOf(theme);
   const room = (dept.room ?? {}) as RoomCfg;
@@ -89,6 +97,34 @@ export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk
   const shelfSlice = theme.sprite.shelfSlice ?? 8;
   const wsName = dept.workspace.split(/[\/]/).filter(Boolean).pop();
 
+  /** O dich cua ban dang keo (da kep trong phong), hoac null neu bi chan (bien hieu, ke sach, decor, ban "+ Tuyen"). */
+  const snap = (id: string, dx: number, dy: number) => {
+    const s = seats[id];
+    const x = Math.min(cols - 1, Math.max(0, Math.round((s.x * cell + dx) / cell)));
+    const y = Math.max(1, Math.round((s.y * cell + dy) / cell));
+    const blocked =
+      (room.decor ?? []).some((d) => d.x === x && d.y === y) ||
+      (y === shelf.y && x >= shelf.x && x < shelf.x + shelfW) ||
+      (y === sign.y && x >= sign.x && x < sign.x + 4) ||
+      (seats[HIRE].x === x && seats[HIRE].y === y);
+    return blocked ? null : { x, y };
+  };
+  const dropSeat = () => {
+    if (!drag) return;
+    const to = snap(drag.id, drag.dx, drag.dy);
+    setDrag(null);
+    if (!to) return;
+    const from = seats[drag.id];
+    const other = staff.find((a) => a.id !== drag.id && seats[a.id].x === to.x && seats[a.id].y === to.y);
+    if (!other && from.x === to.x && from.y === to.y) return;
+    // Ghi het cho ngoi cua phong de bo cuc khong bi xep lai khi them/bot Agent.
+    const next: Record<string, Seat> = Object.fromEntries(staff.map((a) => [a.id, seats[a.id]]));
+    next[drag.id] = { ...from, ...to };
+    if (other) next[other.id] = { ...seats[other.id], x: from.x, y: from.y };
+    onSeats(next);
+  };
+  const ghost = drag && snap(drag.id, drag.dx, drag.dy);
+
   // Ca the phong la canh: san/tuong lat kin, bien hieu + ke sach nam tren tuong, "Da xong" noi o goc duoi.
   return (
     <div className="room-scroll">
@@ -107,8 +143,18 @@ export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk
         ))}
         <div
           className={`room-sign${theme.slots.sign ? "" : " plain"}`}
-          title="Bam phai de sua / dong phong"
+          title="Bam phai de sua / dong phong; keo sang phong khac de doi cho"
           onContextMenu={(e) => (e.preventDefault(), onSignMenu(e.clientX, e.clientY))}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            start.current = { id: "", x: e.clientX, y: e.clientY };
+          }}
+          onPointerUp={(e) => {
+            const s = start.current;
+            start.current = null;
+            if (s && Math.hypot(e.clientX - s.x, e.clientY - s.y) > DRAG_PX) onRoomDrop(e.clientX, e.clientY);
+          }}
           style={{
             left: sign.x * cell + 6,
             top: sign.y * cell + 4,
@@ -146,8 +192,10 @@ export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk
         <button className="seat hire" style={{ left: seats[HIRE].x * cell, top: seats[HIRE].y * cell }} title="Tuyển Agent mới cho phòng (qua HR)" onClick={onHire}>
           + Tuyển
         </button>
+        {ghost && <div className="seat-ghost" style={{ left: ghost.x * cell, top: ghost.y * cell }} />}
         {staff.map((a) => {
             const s = seats[a.id];
+            const dragging = drag?.id === a.id;
             const t = current(a.id);
             // Lead dang giao viec cho Agent nay (subagent) -> ngoi go phim du khong co task rieng.
             const sub = !t && delegated.includes(a.id);
@@ -155,10 +203,27 @@ export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk
             return (
               <button
                 key={a.id}
-                className={`seat${warn ? " warn" : ""}`}
-                style={{ left: s.x * cell, top: s.y * cell }}
+                className={`seat${warn ? " warn" : ""}${dragging ? " dragging" : ""}`}
+                style={{ left: s.x * cell, top: s.y * cell, transform: dragging ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined }}
                 title={warn ? "phien dai, nen tach task" : `${a.name}: ${a.description}`}
-                onClick={() => onDesk(a)}
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  start.current = { id: a.id, x: e.clientX, y: e.clientY };
+                  moved.current = false;
+                }}
+                onPointerMove={(e) => {
+                  const st = start.current;
+                  if (!st || st.id !== a.id) return;
+                  const dx = e.clientX - st.x, dy = e.clientY - st.y;
+                  if (moved.current || Math.hypot(dx, dy) > DRAG_PX) (moved.current = true, setDrag({ id: a.id, dx, dy }));
+                }}
+                onPointerUp={() => {
+                  start.current = null;
+                  dropSeat();
+                }}
+                onPointerCancel={() => (start.current = null, setDrag(null))}
+                onClick={() => (moved.current ? (moved.current = false) : onDesk(a))}
               >
                 <Sprite slot={charSlot(s.character?.replace(/^character\./, ""), a.id, sub ? "typing" : pose(t))} style={{ top: px(theme.sprite.characterY) }} />
                 <Sprite slot="desk" style={{ top: px(theme.sprite.deskY) }} />

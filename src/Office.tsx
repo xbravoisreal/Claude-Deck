@@ -31,9 +31,9 @@ export const bubble = (t: Task, tool?: string) =>
 const HR_ROOM = "__hr";
 
 /** Man Office: luoi phong pixel-art. Moi lan mo lai man nay doc lai department/room.json va theme. */
-export default function Office({ prefs, tasks, ctx, tools, subs, onOpen, onTasks, onDepts, onHistory }: {
+export default function Office({ prefs, tasks, ctx, tools, subs, onOpen, onOpenTask, onTasks, onDepts, onHistory }: {
   prefs: OfficePrefs; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>; subs: Record<string, string[]>;
-  onOpen: (cwd: string, agent: AgentLaunch) => void; onTasks: () => void; onDepts: (d: Dept[]) => void; onHistory: () => void;
+  onOpen: (cwd: string, agent: AgentLaunch) => void; onOpenTask: (t: Task) => void; onTasks: () => void; onDepts: (d: Dept[]) => void; onHistory: () => void;
 }) {
   const [depts, setDepts] = useState<Dept[]>([]);
   const [theme, setTheme] = useState<Theme | null>(null);
@@ -137,6 +137,22 @@ export default function Office({ prefs, tasks, ctx, tools, subs, onOpen, onTasks
       reload();
     });
 
+  // Keo bien hieu phong tha len phong khac: phong keo chiem cho cua phong dich, cac phong giua don lai.
+  const moveRoom = (from: string, to?: string) => {
+    if (!to || to === from) return;
+    const ids = depts.map((d) => d.id).filter((id) => id !== from);
+    const at = depts.findIndex((d) => d.id === to);
+    ids.splice(at, 0, from);
+    safe(async () => (await invoke("office_save_order", { root: prefs.root, order: ids }), reload()));
+  };
+  // Bam ra ngoai panel Agent (tru ban Agent: bam ban khac thi doi sang Agent do) thi dong panel.
+  useEffect(() => {
+    if (!panel) return;
+    const away = (e: PointerEvent) => !(e.target as Element).closest(".agent-panel, .seat") && setPanel(null);
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [panel]);
+
   const reveal = (path: string) => invoke("open_in_editor", { path }).catch((e) => setError(String(e)));
   const pd = panel && depts.find((d) => d.id === panel.dept);
   const pa = pd?.agent_defs.find((a) => a.id === panel!.agent);
@@ -148,7 +164,7 @@ export default function Office({ prefs, tasks, ctx, tools, subs, onOpen, onTasks
         {error && <div className="office-error" onClick={() => setError("")}>{error}</div>}
         {theme.errors.map((e) => <div key={e} className="office-error">theme: {e}</div>)}
         {depts.map((d) => (
-          <div key={d.id} className={`room${d.agent_defs.length > 3 ? " wide" : ""}`}>
+          <div key={d.id} data-dept={d.id} className={`room${d.agent_defs.length > 3 ? " wide" : ""}`}>
             {d.errors.map((e) => <div key={e} className="office-error room-err">{e}</div>)}
             <Room
               dept={d}
@@ -159,6 +175,8 @@ export default function Office({ prefs, tasks, ctx, tools, subs, onOpen, onTasks
               warnK={prefs.warnK}
               onDesk={(a) => setPanel({ dept: d.id, agent: a.id })}
               onHistory={onHistory}
+              onSeats={(seats) => safe(async () => (await invoke("office_save_room", { root: prefs.root, dept: d.id, room: { ...(d.room as object), seats: { ...(d.room as { seats?: object }).seats, ...seats } } }), reload()))}
+              onRoomDrop={(x, y) => moveRoom(d.id, document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-dept]")?.dataset.dept)}
               onWorkspace={() => safe(() => pickWorkspace(d))}
               onHire={() => setHire({ dept: d, need: "" })}
               onSignMenu={(x, y) => setSignMenu({ dept: d, x, y })}
@@ -232,7 +250,6 @@ export default function Office({ prefs, tasks, ctx, tools, subs, onOpen, onTasks
         <button className="room-add room-stats" title="Thống kê Agent" onClick={() => setStats(!stats)}>📊</button>
         {stats && <div className="drawer-backdrop" onClick={() => setStats(false)} />}
         {stats && <Stats root={prefs.root} notes={prefs.notes} depts={depts} onTasks={onTasks} onClose={() => setStats(false)} />}
-        {pd && pa && <div className="drawer-backdrop" onClick={() => setPanel(null)} />}
         {pd && pa && (
           <AgentPanel
             key={`${pd.id}/${pa.id}`}
@@ -246,6 +263,7 @@ export default function Office({ prefs, tasks, ctx, tools, subs, onOpen, onTasks
             onLaunch={() => launch(pd, pa)}
             onEdit={() => reveal(`${prefs.root}\\departments\\${pd.id}\\agents\\${pa.id}.md`)}
             onStatus={(s) => setStatus(pd, pa, s)}
+            onOpenTask={onOpenTask}
             onClose={() => setPanel(null)}
           />
         )}

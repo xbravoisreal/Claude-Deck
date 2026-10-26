@@ -11,8 +11,8 @@ const DAYS = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
 type Routine = { id: string; dept: string; agent: string; title: string; prompt: string; at: string; days: number[]; enabled: boolean; last: number; task: string };
 const when = (r: Routine) => `${r.at} ${r.days.length === 0 || r.days.length === 7 ? "mỗi ngày" : r.days.map((d) => DAYS[d - 1]).join(" ")}`;
 
-export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, onLaunch, onEdit, onStatus, onTasks, onClose }: {
-  root: string; notes: string; dept: Dept; agent: AgentDef; tasks: Task[]; onTasks: () => void;
+export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, onLaunch, onEdit, onStatus, onTasks, onOpenTask, onClose }: {
+  root: string; notes: string; dept: Dept; agent: AgentDef; tasks: Task[]; onTasks: () => void; onOpenTask: (t: Task) => void;
   onAssign: (title: string, body: string, model: string, reference: string) => Promise<unknown>; onLaunch: () => void; onEdit: () => void;
   onStatus: (status: string) => Promise<unknown>; onClose: () => void;
 }) {
@@ -140,7 +140,7 @@ export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, 
         <div className="ap-sub">Lich su task ({mine.length})</div>
         {mine.length === 0 && <div className="hint">Chua co task nao.</div>}
         {mine.map((t) => (
-          <div key={t.id} className="ap-task">
+          <div key={t.id} className="ap-task" style={t.status === "backlog" ? undefined : { cursor: "pointer" }} title={t.status === "backlog" ? undefined : "Mo phien"} onClick={() => t.status !== "backlog" && onOpenTask(t)}>
             <span className={`bubble ${t.status}`}>{t.status === "done" ? (t.reason === "da huy" ? "Da huy" : "Da duyet") : bubble(t) || "Hang doi"}</span>
             <span className="t">{t.title}</span>
             <span className="d">{t.model && `${t.model} · `}{t.id}</span>

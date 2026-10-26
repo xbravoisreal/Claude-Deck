@@ -243,3 +243,7 @@ table.stats td:last-child { white-space: normal; }
 .board-row .d { flex: 1; color: #888; font-size: 12px; }
 .assign > button, .ap-sub button { padding: 4px 10px; border: 1px solid var(--o-border, #454545); border-radius: 4px; color: var(--o-text, #d4d4d4); }
 .assign > button:hover, .ap-sub button:hover { background: var(--o-input, #3d3d3d); }
+.seat { touch-action: none; user-select: none; }
+.seat.dragging { z-index: 10; cursor: grabbing; opacity: .85; pointer-events: none; }
+.seat-ghost { position: absolute; width: var(--o-cell); height: var(--o-cell); border: 2px dashed var(--o-accent); border-radius: 4px; z-index: 1; pointer-events: none; }
+.room-sign { cursor: grab; touch-action: none; user-select: none; }
