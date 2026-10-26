@@ -288,6 +288,7 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
                 let _ = tasks::update(&c.root, &id, |t| Ok(t.tg_msg = 0));
                 changed();
             }
+            Err(e) if e.starts_with("merge") => answer(c, &qid, "Merge lỗi, xem trên app"),
             Err(_) => answer(c, &qid, "Đã xử lý rồi"),
         },
         Action::Rework(id) => match find(&c.root, &id).filter(|t| t.status == "review") {
@@ -411,7 +412,7 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
         }
         Action::Assign(dept, agent, text) => {
             let title = clip(text.lines().next().unwrap_or(""), 80);
-            match tasks::task_create(c.root.clone(), dept, agent, title, text, Some(c.notes.clone()), None) {
+            match tasks::task_create(c.root.clone(), dept, agent, title, text, Some(c.notes.clone()), None, None) {
                 Ok(t) => {
                     answer(c, &qid, "Đã giao");
                     let (agent, dept) = names(&c.root, &t);

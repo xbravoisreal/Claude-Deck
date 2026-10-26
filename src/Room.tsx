@@ -55,9 +55,9 @@ const ago = (ms: number) => {
   return m < 1 ? "vua xong" : m < 60 ? `${m} phut` : `${Math.round(m / 60)} gio`;
 };
 
-export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory, onWorkspace, onHire }: {
+export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory, onWorkspace, onHire, onSignMenu }: {
   dept: Dept; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>; warnK: number;
-  onDesk: (a: AgentDef) => void; onHistory: () => void; onWorkspace: () => void; onHire: () => void;
+  onDesk: (a: AgentDef) => void; onHistory: () => void; onWorkspace: () => void; onHire: () => void; onSignMenu: (x: number, y: number) => void;
 }) {
   const theme = useTheme()!;
   const cell = cellOf(theme);
@@ -107,6 +107,8 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
         ))}
         <div
           className={`room-sign${theme.slots.sign ? "" : " plain"}`}
+          title="Bam phai de sua / dong phong"
+          onContextMenu={(e) => (e.preventDefault(), onSignMenu(e.clientX, e.clientY))}
           style={{
             left: sign.x * cell + 6,
             top: sign.y * cell + 4,

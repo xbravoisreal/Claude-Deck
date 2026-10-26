@@ -45,6 +45,13 @@ function AccountMenu({ onSwitch }: { onSwitch: () => void }) {
   const [menu, setMenu] = useState(false);
   const refresh = () => invoke<Accounts>("list_accounts").then(setA).catch(() => setA(null));
   useEffect(() => void refresh(), []);
+  // Bam ra ngoai menu thi dong (bam lai nut thi toggle lo).
+  useEffect(() => {
+    if (!menu) return;
+    const off = (e: MouseEvent) => !(e.target as Element).closest(".acct") && setMenu(false);
+    document.addEventListener("mousedown", off);
+    return () => document.removeEventListener("mousedown", off);
+  }, [menu]);
 
   const toggle = () => (menu ? setMenu(false) : (refresh(), setMenu(true)));
   const pick = async (email: string) => {

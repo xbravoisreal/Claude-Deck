@@ -53,6 +53,8 @@ pub fn run() {
             office::office_create_department,
             office::office_templates,
             office::office_set_agent_status,
+            office::office_edit_department,
+            office::office_close_department,
             hr::hr_candidates,
             hr::hr_request,
             hr::hr_revise,

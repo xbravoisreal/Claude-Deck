@@ -75,19 +75,16 @@ Mỗi Agent khai báo thêm (trong file riêng `agents/<id>.meta.json` hoặc fr
 
 ## 3. Phòng ban 1: Software Development
 
-Mỗi Agent một việc, có skill riêng. Đề xuất đội hình khởi đầu (HR có thể chỉnh sau):
+Mỗi Agent một việc, có skill riêng. Đội hình đã chốt: 4 Agent (HR có thể chỉnh sau):
 
 | Agent | Việc duy nhất | Skill đi kèm | Quyền chính |
 |---|---|---|---|
 | Tech Lead | Nhận yêu cầu, chia việc, điều phối, tổng hợp kết quả | task-breakdown, handoff-report | đọc, gọi Agent khác |
-| Analyst | Làm rõ yêu cầu, viết spec ngắn và tiêu chí nghiệm thu | spec-writing | đọc, ghi file spec |
-| Frontend Dev | Làm phần giao diện | ui-conventions | đọc, ghi, chạy build/test |
-| Backend Dev | Làm API, logic, dữ liệu | api-conventions | đọc, ghi, chạy build/test |
+| Dev | Làm giao diện, API, logic, dữ liệu | ui-conventions, api-conventions | đọc, ghi, chạy build/test |
 | Code Reviewer | Review diff, tìm lỗi và rủi ro | code-review-checklist | chỉ đọc |
 | QA Tester | Viết và chạy test, báo lỗi tái hiện được | test-writing | đọc, ghi test, chạy test |
-| Release | Đóng gói, changelog, kiểm tra trước khi phát hành | release-checklist | đọc, git (không push khi chưa duyệt) |
 
-Luồng chuẩn: Bạn giao task cho Tech Lead -> Analyst làm rõ -> Dev thực hiện -> Reviewer và QA kiểm tra -> Tech Lead tổng hợp -> **Bạn duyệt**. Reviewer và QA phải ở trạng thái chỉ đọc hoặc quyền hẹp để không "tự sửa rồi tự khen".
+Luồng chuẩn: Bạn giao task cho Tech Lead làm rõ và chia việc -> Dev thực hiện -> Reviewer và QA kiểm tra -> Tech Lead tổng hợp -> **Bạn duyệt**. Reviewer và QA phải ở trạng thái chỉ đọc hoặc quyền hẹp để không "tự sửa rồi tự khen".
 
 Hai chế độ chạy, cho phép chọn theo task:
 - **Ủy quyền qua Tech Lead:** một phiên Tech Lead gọi các Agent khác như subagent. Dễ theo dõi, các Agent con hiện thành bàn phụ của phiên cha.

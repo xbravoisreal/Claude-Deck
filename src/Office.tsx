@@ -28,6 +28,8 @@ export const bubble = (t: Task, tool?: string) =>
   : t.status === "running" ? (tool ? `Dang: ${tool}` : `Dang: ${t.title}`)
   : "";
 
+const HR_ROOM = "__hr";
+
 /** Man Office: luoi phong pixel-art. Moi lan mo lai man nay doc lai department/room.json va theme. */
 export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDepts, onHistory }: {
   prefs: OfficePrefs; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>;
@@ -40,6 +42,8 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
   const [newRoom, setNewRoom] = useState<{ name: string; icon: string; mission: string; template: string; askHr: boolean } | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [stats, setStats] = useState(false);
+  const [signMenu, setSignMenu] = useState<{ dept: Dept; x: number; y: number } | null>(null);
+  const [edit, setEdit] = useState<{ dept: Dept; name: string; icon: string; mission: string } | null>(null);
   const [hire, setHire] = useState<{ dept: Dept; need: string } | null>(null);
 
   const reload = () =>
@@ -72,9 +76,9 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
       onOpen(cwd, { label: `${d.icon} ${a.name}`, ...spec });
     });
 
-  const assign = async (d: Dept, a: AgentDef, title: string, body: string, model: string) => {
+  const assign = async (d: Dept, a: AgentDef, title: string, body: string, model: string, reference: string) => {
     if (!d.workspace && !(await pickWorkspace(d))) return;
-    await invoke("task_create", { root: prefs.root, dept: d.id, agent: a.id, title, body, notesRoot: prefs.notes || null, model: model || null }).catch((e) => {
+    await invoke("task_create", { root: prefs.root, dept: d.id, agent: a.id, title, body, notesRoot: prefs.notes || null, model: model || null, reference: reference || null }).catch((e) => {
       setError(String(e));
       throw e;
     });
@@ -102,8 +106,9 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
     invoke<Template[]>("office_templates", { root: prefs.root }).then(setTemplates, (e) => setError(String(e)));
   };
   const pickTemplate = (id: string) => {
+    if (id === HR_ROOM) return setNewRoom((r) => r && { ...r, template: "", askHr: true });
     const t = templates.find((t) => t.id === id);
-    setNewRoom((r) => r && (t ? { ...r, template: id, icon: t.icon, name: r.name || t.name, mission: r.mission || t.mission } : { ...r, template: "" }));
+    setNewRoom((r) => r && (t ? { ...r, askHr: false, template: id, icon: t.icon, name: r.name || t.name, mission: r.mission || t.mission } : { ...r, template: "", askHr: false }));
   };
 
   // "+ Tuyen": giao yeu cau cho Recruiter phong HR.
@@ -120,6 +125,17 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
     if (status === "retired") setPanel(null);
     reload();
   };
+
+  const closeDept = (d: Dept) =>
+    window.confirm(`Đóng phòng ${d.name}? Thư mục được chuyển sang <office>\closed, không xóa.`) &&
+    safe(async () => (await invoke("office_close_department", { root: prefs.root, dept: d.id }), reload()));
+  const saveEdit = () =>
+    safe(async () => {
+      if (!edit?.name.trim()) return;
+      await invoke("office_edit_department", { root: prefs.root, dept: edit.dept.id, name: edit.name, icon: edit.icon, mission: edit.mission });
+      setEdit(null);
+      reload();
+    });
 
   const reveal = (path: string) => invoke("open_in_editor", { path }).catch((e) => setError(String(e)));
   const pd = panel && depts.find((d) => d.id === panel.dept);
@@ -144,6 +160,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
               onHistory={onHistory}
               onWorkspace={() => safe(() => pickWorkspace(d))}
               onHire={() => setHire({ dept: d, need: "" })}
+              onSignMenu={(x, y) => setSignMenu({ dept: d, x, y })}
             />
             {d.id === "hr" && <Candidates root={prefs.root} notes={prefs.notes} depts={depts} tick={tasks} onTasks={onTasks} onHired={reload} />}
           </div>
@@ -153,8 +170,9 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
         {newRoom && (
           <div className="new-room">
             <b>Mo phong moi</b>
-            <select value={newRoom.template} onChange={(e) => pickTemplate(e.target.value)}>
+            <select value={newRoom.askHr ? HR_ROOM : newRoom.template} onChange={(e) => pickTemplate(e.target.value)}>
               <option value="">Phòng trống</option>
+              <option value={HR_ROOM}>🧑‍💼 Nhờ HR tuyển cả phòng mới</option>
               {templates.map((t) => <option key={t.id} value={t.id}>{t.icon} {t.name} · {t.agents.length} Agent</option>)}
             </select>
             <div className="new-room-row">
@@ -164,14 +182,36 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
             <input placeholder="Nhiem vu cua phong" value={newRoom.mission} onChange={(e) => setNewRoom({ ...newRoom, mission: e.target.value })} onKeyDown={(e) => e.key === "Enter" && createRoom()} />
             {newRoom.template ? (
               <div className="hint">Chép đội hình từ template: {templates.find((t) => t.id === newRoom.template)?.agents.join(", ")}</div>
-            ) : (
-              <label className="hint"><input type="checkbox" checked={newRoom.askHr} onChange={(e) => setNewRoom({ ...newRoom, askHr: e.target.checked })} /> Nhờ HR đề xuất đội hình (theo nhiệm vụ)</label>
-            )}
+            ) : newRoom.askHr ? (
+              <div className="hint">Phòng mở trống, Recruiter (HR) đề xuất 3–5 Agent theo nhiệm vụ ở trên; Síp duyệt từng hồ sơ ở khu Ứng viên.</div>
+            ) : null}
             <div className="set-actions">
               <button onClick={() => reveal(`${prefs.root}\\templates\\departments`)}>Mo template</button>
               <button onClick={() => reveal(`${prefs.root}\\departments`)}>Mo thu muc</button>
               <button onClick={() => setNewRoom(null)}>Huy</button>
               <button className="primary" disabled={!newRoom.name.trim()} onClick={createRoom}>Tao</button>
+            </div>
+          </div>
+        )}
+        {signMenu && <div className="ctx-backdrop" onClick={() => setSignMenu(null)} onContextMenu={(e) => (e.preventDefault(), setSignMenu(null))} />}
+        {signMenu && (
+          <div className="ctx-menu" style={{ left: signMenu.x, top: signMenu.y }}>
+            <button onClick={() => (setEdit({ dept: signMenu.dept, name: signMenu.dept.name, icon: signMenu.dept.icon, mission: signMenu.dept.mission }), setSignMenu(null))}>Sửa</button>
+            <button onClick={() => (closeDept(signMenu.dept), setSignMenu(null))}>Đóng phòng</button>
+          </div>
+        )}
+        {edit && <div className="drawer-backdrop" onClick={() => setEdit(null)} />}
+        {edit && (
+          <div className="new-room">
+            <b>Sửa phòng {edit.dept.id}</b>
+            <div className="new-room-row">
+              <input className="new-room-icon" value={edit.icon} onChange={(e) => setEdit({ ...edit, icon: e.target.value })} />
+              <input autoFocus placeholder="Tên phòng" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && saveEdit()} />
+            </div>
+            <input placeholder="Nhiệm vụ của phòng" value={edit.mission} onChange={(e) => setEdit({ ...edit, mission: e.target.value })} onKeyDown={(e) => e.key === "Enter" && saveEdit()} />
+            <div className="set-actions">
+              <button onClick={() => setEdit(null)}>Hủy</button>
+              <button className="primary" disabled={!edit.name.trim()} onClick={saveEdit}>Lưu</button>
             </div>
           </div>
         )}
@@ -201,7 +241,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
             dept={pd}
             agent={pa}
             tasks={tasks}
-            onAssign={(title, body, model) => assign(pd, pa, title, body, model)}
+            onAssign={(title, body, model, ref) => assign(pd, pa, title, body, model, ref)}
             onLaunch={() => launch(pd, pa)}
             onEdit={() => reveal(`${prefs.root}\\departments\\${pd.id}\\agents\\${pa.id}.md`)}
             onStatus={(s) => setStatus(pd, pa, s)}

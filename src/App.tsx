@@ -89,6 +89,7 @@ function Workspace({ ws, on, active, onFocus, onIdle, onEnter, onRatio, prefs, o
       <div className="shell">
         <Pane id={`${ws.id}-shell`} cwd={ws.cwd} kind="shell" visible={on} />
       </div>
+      {hist && <div className="ws-backdrop" onClick={() => setHist(null)} />}
       {hist && (
         <div className="history">
           <div className="history-head">
@@ -266,8 +267,7 @@ export default function App() {
 
   // Xu ly tren app -> sua tin Telegram cu (bo nut) de dien thoai khong bam lai.
   const approve = (t: Task) => {
-    closeTaskTab(t.id);
-    invoke("task_approve", { root: root(), id: t.id }).then(() => (invoke("tg_resolved", { id: t.id, text: "✅ Đã duyệt" }), refresh()), fail);
+    invoke("task_approve", { root: root(), id: t.id }).then(() => (closeTaskTab(t.id), invoke("tg_resolved", { id: t.id, text: "✅ Đã duyệt" }), refresh()), fail);
   };
   const rework = (t: Task, note: string) => {
     closeTaskTab(t.id);
@@ -447,6 +447,7 @@ export default function App() {
         ))}
       </div>
       {drawer && <Drawer key={drawer} initialTab={drawer} tasks={tasks} names={names} onApprove={approve} onRework={rework} onCancel={cancel} onOpen={openTask} onClose={() => setDrawer(false)} />}
+      {settings && <div className="drawer-backdrop" onClick={() => setSettings(false)} />}
       {settings && <Settings value={office} onSave={setOffice} onClose={() => setSettings(false)} />}
       <UsageFooter />
     </div>

@@ -68,7 +68,7 @@ pub fn due(r: &Routine, now: DateTime<Local>) -> bool {
 
 fn give(root: &str, r: &Routine, notes: Option<String>) -> Result<Task, String> {
     let body = format!("{}\n\n(Routine `{}` · {} {})", r.prompt, r.id, r.at, if r.days.is_empty() { "moi ngay".into() } else { format!("thu {:?}", r.days) });
-    task_create(root.into(), r.dept.clone(), r.agent.clone(), format!("⏰ {}", r.title), body, notes, None)
+    task_create(root.into(), r.dept.clone(), r.agent.clone(), format!("⏰ {}", r.title), body, notes, None, None)
 }
 
 #[tauri::command]

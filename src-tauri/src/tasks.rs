@@ -109,6 +109,12 @@ fn link_node_modules(ws: &Path, tree: &Path) {
 }
 
 pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: Option<&str>) -> Result<Task, String> {
+    create_task_from(d, agent, title, body, notes, None)
+}
+
+/// `reference`: task da duyet de lam tiep. Worktree moi xuat phat tu HEAD (da co ket qua merge); neu nhanh cua task do
+/// chua vao HEAD (duyet truoc khi co merge tu dong) thi xuat phat tu chinh nhanh do. Brief ghi lai task tham chieu.
+pub fn create_task_from(d: &Department, agent: &str, title: &str, body: &str, notes: Option<&str>, reference: Option<&Task>) -> Result<Task, String> {
     let ws = Path::new(&d.config.workspace);
     if d.config.workspace.is_empty() {
         return Err("phong chua co thu muc du an".into());
@@ -134,7 +140,15 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
     // Chi lam thang trong workspace khi no khong phai git repo; repo ma tao worktree loi thi bao loi (khong mat cach ly).
     let tree = trees.join(&id);
     let cwd = if git(ws, &["rev-parse", "--is-inside-work-tree"]).is_ok() {
-        git(ws, &["worktree", "add", &tree.to_string_lossy(), "-b", &format!("office/{id}")]).map_err(|e| format!("tao worktree loi: {e}"))?;
+        let new = format!("office/{id}");
+        let mut args = vec!["worktree", "add", "-b", new.as_str()];
+        let tree_s = tree.to_string_lossy();
+        args.push(&tree_s);
+        let old = reference.map(|r| format!("office/{}", r.id));
+        if let Some(old) = old.as_deref().filter(|o| git(ws, &["rev-parse", "--verify", o]).is_ok() && git(ws, &["merge-base", "--is-ancestor", o, "HEAD"]).is_err()) {
+            args.push(old);
+        }
+        git(ws, &args).map_err(|e| format!("tao worktree loi: {e}"))?;
         exclude_office(ws);
         link_node_modules(ws, &tree);
         tree
@@ -143,8 +157,18 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
     };
     let dir = base.join(&id);
     std::fs::create_dir_all(&dir).map_err(err)?;
+    let refer = reference.map_or(String::new(), |r| {
+        format!(
+            "\n## Tham chieu\n\nLam tiep task {} ({}, agent {}): ket qua o {}, nhanh office/{}. Code cua task do da co san trong thu muc lam viec nay.\n",
+            r.id,
+            r.title,
+            r.agent,
+            Path::new(&r.dir).join("result.md").display(),
+            r.id
+        )
+    });
     let brief = format!(
-        "---\ntask: {id}\nagent: {agent}\ndepartment: {}\nstatus: backlog\ncreated: {}\ntokens: 0\n---\n# {title}\n\n{body}\n",
+        "---\ntask: {id}\nagent: {agent}\ndepartment: {}\nstatus: backlog\ncreated: {}\ntokens: 0\n---\n# {title}\n\n{body}\n{refer}",
         d.config.id,
         now.to_rfc3339()
     );
@@ -232,10 +256,34 @@ pub fn resume_busy(t: &mut Task, cache_read: u64) {
     }
 }
 
+/// Duyet task chay trong worktree: commit phan con do, merge nhanh `office/<id>` vao nhanh dang mo cua workspace.
+/// Xung dot -> merge --abort va bao loi (task van o Cho sip). Giu worktree de sep xem lai.
+fn merge_worktree(t: &Task) -> Result<(), String> {
+    let tree = Path::new(&t.cwd);
+    let ws = match tree.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+        Some(ws) if tree.parent().is_some_and(|p| p.ends_with(".office/worktrees")) => ws,
+        _ => return Ok(()),
+    };
+    let branch = format!("office/{}", t.id);
+    if git(ws, &["rev-parse", "--verify", &branch]).is_err() {
+        return Ok(());
+    }
+    git(tree, &["add", "-A"])?;
+    if git(tree, &["diff", "--cached", "--quiet"]).is_err() {
+        git(tree, &["commit", "-m", &format!("office: {}", t.title)])?;
+    }
+    git(ws, &["merge", "--no-ff", &branch, "-m", &format!("Merge {branch}: {}", t.title)]).map_err(|e| {
+        let _ = git(ws, &["merge", "--abort"]);
+        format!("merge {branch} loi (task van cho duyet): {e}")
+    })?;
+    Ok(())
+}
+
 pub fn approve(t: &mut Task) -> Result<(), String> {
     if t.status != "review" {
         return Err("da xu ly roi".into());
     }
+    merge_worktree(t)?;
     t.status = "done".into();
     t.finished = chrono::Local::now().timestamp_millis();
     Ok(())
@@ -289,13 +337,17 @@ pub fn task_list(root: String) -> Result<Vec<Task>, String> {
 }
 
 #[tauri::command]
-pub fn task_create(root: String, dept: String, agent: String, title: String, body: String, notes_root: Option<String>, model: Option<String>) -> Result<Task, String> {
+pub fn task_create(root: String, dept: String, agent: String, title: String, body: String, notes_root: Option<String>, model: Option<String>, reference: Option<String>) -> Result<Task, String> {
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept).ok_or(format!("khong co phong {dept}"))?;
     let model = model.filter(|m| !m.is_empty());
     if model.as_deref().is_some_and(|m| !crate::office::valid_model(m)) {
         return Err(format!("model khong hop le: {}", model.unwrap_or_default()));
     }
-    let mut t = create_task(&d, &agent, &title, &body, notes_root.as_deref())?;
+    let reference = match reference.filter(|r| !r.is_empty()) {
+        Some(r) => Some(load_tasks(Path::new(&root))?.into_iter().find(|t| t.id == r && t.dept == dept && t.status == "done" && t.reason != "da huy").ok_or(format!("task tham chieu {r} khong hop le"))?),
+        None => None,
+    };
+    let mut t = create_task_from(&d, &agent, &title, &body, notes_root.as_deref(), reference.as_ref())?;
     if let Some(m) = model {
         t.model = m; // sep chon tay thang router
     }
@@ -631,6 +683,22 @@ mod tests {
     }
 
     #[test]
+    fn approve_merges_worktree_into_workspace() {
+        let (root, ws, d) = setup("merge", true);
+        let mut t = create_task(&d, "dev", "Them file", "", None).unwrap();
+        fs::write(Path::new(&t.cwd).join("moi.txt"), "x").unwrap();
+        t.status = "review".into();
+        approve(&mut t).unwrap();
+        assert_eq!(t.status, "done");
+        assert!(ws.join("moi.txt").exists());
+        // Lam tiep tu task da duyet: worktree moi co san file, brief ghi tham chieu.
+        let t2 = create_task_from(&d, "dev", "Tiep", "", None, Some(&t)).unwrap();
+        assert!(Path::new(&t2.cwd).join("moi.txt").exists());
+        assert!(fs::read_to_string(Path::new(&t2.dir).join("brief.md")).unwrap().contains(&format!("Tham chieu\n\nLam tiep task {}", t.id)));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn create_task_ids_unique() {
         let (root, _ws, d) = setup("unique", true);
         let a = create_task(&d, "dev", "a", "", None).unwrap();
@@ -785,7 +853,7 @@ mod tests {
         let (root, _ws, d) = setup("resume0", true);
         let r = root.join("office").to_string_lossy().to_string();
         office_set_workspace(r.clone(), "software-dev".into(), d.config.workspace.clone()).unwrap();
-        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "".into(), None, None).unwrap();
+        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "".into(), None, None, None).unwrap();
         task_stop_any(&r, &t.id); // gia lap khoi chay loi: waiting, started=false
         let s = task_resume(r.clone(), t.id.clone(), None, Some("bo qua".into())).unwrap();
         assert!(s.args.contains("--session-id") && !s.args.contains("bo qua"), "{}", s.args); // chua chay: prompt goc, bo cau tra loi
@@ -833,7 +901,7 @@ mod tests {
         let office = root.join("office");
         let r = office.to_string_lossy().to_string();
         office_set_workspace(r.clone(), "software-dev".into(), d.config.workspace.clone()).unwrap();
-        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "y".into(), None, None).unwrap();
+        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "y".into(), None, None, None).unwrap();
         let s = task_start_next(r.clone(), 3, None).unwrap();
         assert_eq!(s.len(), 1);
         assert!(s[0].args.contains("--agent 'office:dev'") && s[0].args.contains(&format!("--session-id {}", t.session)), "{}", s[0].args);

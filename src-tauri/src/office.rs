@@ -346,6 +346,39 @@ pub fn office_set_workspace(root: String, dept: String, workspace: String) -> Re
     edit_department(Path::new(&root), &dept, |v| Ok(v["workspace"] = workspace.into()))
 }
 
+/// Sua ten / icon / nhiem vu phong (id = ten thu muc, khong doi).
+#[tauri::command]
+pub fn office_edit_department(root: String, dept: String, name: String, icon: String, mission: String) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("ten phong khong duoc de trong".into());
+    }
+    edit_department(Path::new(&root), &dept, |v| {
+        v["name"] = name.trim().into();
+        v["icon"] = icon.trim().into();
+        v["mission"] = mission.trim().into();
+        Ok(())
+    })
+}
+
+/// Dong phong: chuyen thu muc sang `<root>/closed/` (khong xoa, mo lai bang cach chuyen nguoc). Phong HR va phong con task chua xong thi khong dong.
+#[tauri::command]
+pub fn office_close_department(root: String, dept: String) -> Result<(), String> {
+    if dept == "hr" {
+        return Err("khong dong duoc phong HR".into());
+    }
+    let rp = Path::new(&root);
+    crate::tasks::with_tasks(rp, |ts| {
+        let open = ts.iter().filter(|t| t.dept == dept && t.status != "done").count();
+        if open > 0 {
+            return Err(format!("phong con {open} task chua xong: duyet hoac huy truoc"));
+        }
+        let src = rp.join("departments").join(&dept);
+        let dst = rp.join("closed");
+        std::fs::create_dir_all(&dst).map_err(err)?;
+        std::fs::rename(src, dst.join(format!("{dept}-{}", chrono::Local::now().format("%y%m%d-%H%M%S")))).map_err(err)
+    })
+}
+
 /// Chinh thuc (active, bo tran rieng) / thu viec / cho nghi. Cho nghi khi con task chua xong -> tu choi.
 #[tauri::command]
 pub fn office_set_agent_status(root: String, dept: String, agent: String, status: String) -> Result<(), String> {

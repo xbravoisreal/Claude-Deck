@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { bubble, type AgentDef, type Dept, type Task } from "./Office";
 
 /** Panel chi tiet Agent (bam vao ban): thong tin, lich su task, Giao viec / Mo phien / Sua. */
@@ -12,16 +13,29 @@ const when = (r: Routine) => `${r.at} ${r.days.length === 0 || r.days.length ===
 
 export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, onLaunch, onEdit, onStatus, onTasks, onClose }: {
   root: string; notes: string; dept: Dept; agent: AgentDef; tasks: Task[]; onTasks: () => void;
-  onAssign: (title: string, body: string, model: string) => Promise<unknown>; onLaunch: () => void; onEdit: () => void;
+  onAssign: (title: string, body: string, model: string, reference: string) => Promise<unknown>; onLaunch: () => void; onEdit: () => void;
   onStatus: (status: string) => Promise<unknown>; onClose: () => void;
 }) {
   const [retire, setRetire] = useState(false);
   const [error, setError] = useState("");
   const status = dept.status?.[agent.id] ?? "active";
   const change = (s: string) => onStatus(s).catch((e) => (setError(String(e)), setRetire(false)));
-  const [form, setForm] = useState<{ title: string; body: string; model: string } | null>(null);
+  const [form, setForm] = useState<{ title: string; body: string; model: string; ref: string; images: string[] } | null>(null);
   const [sending, setSending] = useState(false);
   const mine = tasks.filter((t) => t.dept === dept.id && t.agent === agent.id).sort((a, b) => b.created - a.created);
+  // Tham chieu: task da duyet cua phong co worktree rieng, de mo ra lam tiep.
+  const refs = tasks.filter((t) => t.dept === dept.id && t.status === "done" && t.reason !== "da huy" && /[\\/]\.office[\\/]worktrees[\\/]/.test(t.cwd)).sort((a, b) => b.finished - a.finished);
+  const addImages = (paths: string[]) => setForm((f) => f && { ...f, images: [...f.images, ...paths] });
+  const pasteImage = async (e: React.ClipboardEvent) => {
+    const file = [...e.clipboardData.items].find((i) => i.type.startsWith("image/"))?.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    addImages([await invoke<string>("save_image", new Uint8Array(await file.arrayBuffer()))]);
+  };
+  const pickImages = async () => {
+    const r = await open({ multiple: true, filters: [{ name: "Anh", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }] });
+    if (Array.isArray(r)) addImages(r);
+  };
   const budget = dept.budget?.[agent.id] ?? dept.defaults?.maxTokens ?? 4_000_000;
 
   const [routines, setRoutines] = useState<Routine[]>([]);
@@ -36,7 +50,9 @@ export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, 
     if (!form?.title.trim() || sending) return;
     setSending(true); // bam 2 lan khong tao 2 task
     try {
-      await onAssign(form.title.trim(), form.body, form.model);
+      // Anh di kem la duong dan file: Agent tu doc anh bang tool Read.
+      const imgs = form.images.length ? `\n\nAnh dinh kem (doc bang Read):\n${form.images.map((p) => `- ${p}`).join("\n")}` : "";
+      await onAssign(form.title.trim(), form.body + imgs, form.model, form.ref);
       setForm(null);
     } finally {
       setSending(false);
@@ -65,12 +81,20 @@ export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, 
         <div className="set-actions">
           <button onClick={onEdit}>Sua</button>
           <button onClick={onLaunch}>Mo phien</button>
-          <button className="primary" onClick={() => setForm({ title: "", body: "", model: "" })}>Giao viec</button>
+          <button className="primary" onClick={() => setForm({ title: "", body: "", model: "", ref: "", images: [] })}>Giao viec</button>
         </div>
         {form && (
           <div className="assign">
             <input autoFocus placeholder="Tieu de task" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-            <textarea placeholder="Mo ta, tieu chi nghiem thu..." value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />
+            <textarea placeholder="Mo ta, tieu chi nghiem thu... (dan anh vao day duoc)" value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} onPaste={pasteImage} />
+            {form.images.map((p) => (
+              <div key={p} className="hint" title={p}>🖼 {p.split(/[\\/]/).pop()} <button onClick={() => setForm({ ...form, images: form.images.filter((x) => x !== p) })}>✕</button></div>
+            ))}
+            <button onClick={pickImages}>Dinh kem anh...</button>
+            <select value={form.ref} title="Mo ra lam tiep tu task da duyet" onChange={(e) => setForm({ ...form, ref: e.target.value })}>
+              <option value="">Tham chiếu: không</option>
+              {refs.map((t) => <option key={t.id} value={t.id}>{t.id}-{t.agent} · {t.title}</option>)}
+            </select>
             <select value={form.model} title="Tự động: theo router của phòng, không khớp thì model của Agent" onChange={(e) => setForm({ ...form, model: e.target.value })}>
               <option value="">Model: tự động ({agent.model ?? "default"})</option>
               {["haiku", "sonnet", "opus"].map((m) => <option key={m} value={m}>{m}</option>)}
