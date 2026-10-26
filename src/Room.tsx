@@ -4,8 +4,10 @@ import { bubble, type Dept, type Task, type AgentDef } from "./Office";
 
 type Seat = { x: number; y: number; character?: string };
 type Pos = { x: number; y: number };
+/** Kich thuoc phong: 2 muc rong (1 | 2 cot luoi) x 2 muc cao (vua | cao them 3 o). */
+export type Size = { w: 1 | 2; h: 1 | 2 };
 /** sign: vi tri bien hieu (ten + mo ta phong); workspace: vi tri ke sach chua thu muc du an, w = so o chieu ngang (mac dinh 3). */
-type RoomCfg = { cols?: number; rows?: number; floor?: string; decor?: ({ slot: string } & Pos)[]; seats?: Record<string, Seat>; sign?: Pos; workspace?: Pos & { w?: number } };
+type RoomCfg = { cols?: number; rows?: number; floor?: string; decor?: ({ slot: string } & Pos)[]; seats?: Record<string, Seat>; sign?: Pos; workspace?: Pos & { w?: number }; size?: Size };
 
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 
@@ -46,8 +48,6 @@ export function seatsFor(room: RoomCfg, agents: string[], cols: number, rows: nu
   };
 }
 
-const HIRE = "__hire";
-
 /** Trang thai nhan vat theo task hien tai. */
 const pose = (t?: Task) => (t?.status === "running" ? "typing" : t?.status === "waiting" || t?.status === "review" ? "waiting" : "idle");
 
@@ -56,17 +56,21 @@ const ago = (ms: number) => {
   return m < 1 ? "vua xong" : m < 60 ? `${m} phut` : `${Math.round(m / 60)} gio`;
 };
 
+/** Kich thuoc phong: room.json `size`, thieu thi rong 2 khi co tren 3 Agent. */
+export const roomSize = (room: RoomCfg, agents: number): Size => ({ w: room.size?.w === 1 || room.size?.w === 2 ? room.size.w : agents > 3 ? 2 : 1, h: room.size?.h === 2 ? 2 : 1 });
+
 const DRAG_PX = 5; // keo it hon nguong nay van tinh la bam
 
-export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk, onHistory, onWorkspace, onHire, onSignMenu, onSeats, onRoomDrop }: {
+export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk, onHistory, onWorkspace, onHire, onSignMenu, onSeats, onRoomDrop, onSize }: {
   dept: Dept; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>; delegated: string[]; warnK: number;
   onDesk: (a: AgentDef) => void; onHistory: () => void; onWorkspace: () => void; onHire: () => void; onSignMenu: (x: number, y: number) => void;
-  onSeats: (seats: Record<string, Seat>) => void; onRoomDrop: (x: number, y: number) => void;
+  onSeats: (seats: Record<string, Seat>) => void; onRoomDrop: (x: number, y: number) => void; onSize: (size: Size) => void;
 }) {
   // Keo ban: tha vao o luoi gan nhat (diem neo); o co Agent khac thi doi cho, o bi chan thi tra ve cho cu.
   const [drag, setDrag] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const start = useRef<{ id: string; x: number; y: number } | null>(null);
   const moved = useRef(false);
+  const grip = useRef<Pos | null>(null);
   const theme = useTheme()!;
   const cell = cellOf(theme);
   const room = (dept.room ?? {}) as RoomCfg;
@@ -74,7 +78,7 @@ export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk
   // Agent da nghi khong co ban; ban cuoi "__hire" = vi tri chua tuyen (+ Tuyen).
   const status = (id: string) => dept.status?.[id] ?? "active";
   const staff = dept.agent_defs.filter((a) => status(a.id) !== "retired");
-  const { seats, cols: seatCols, rows } = seatsFor(room, [...staff.map((a) => a.id), HIRE], room.cols ?? Math.max(6, staff.length * 2 + 4), room.rows ?? 3);
+  const { seats, cols: seatCols, rows } = seatsFor(room, staff.map((a) => a.id), room.cols ?? Math.max(6, staff.length * 2 + 4), room.rows ?? 3);
   const floor = room.floor && theme.slots[room.floor] ? room.floor : Object.keys(theme.slots).find((k) => k.startsWith("floor.")) ?? "";
   const chars = characters(theme);
   /** Slot nhan vat cho tu the; thieu anh tu the thi lui ve typing, roi ve nhan vat mac dinh theo ten. */
@@ -90,6 +94,7 @@ export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk
   const done = mine.filter((t) => t.status === "done" && t.reason !== "da huy").sort((a, b) => (b.finished || b.created) - (a.finished || a.created));
   const px = (v = 0) => v * theme.sprite.scale;
 
+  const size = roomSize(room, staff.length);
   const sign = room.sign ?? { x: 0, y: 0 };
   const shelf = room.workspace ?? { x: Math.max(0, seatCols - shelfW), y: 0 };
   const cols = Math.max(seatCols, shelf.x + shelfW);
@@ -105,8 +110,7 @@ export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk
     const blocked =
       (room.decor ?? []).some((d) => d.x === x && d.y === y) ||
       (y === shelf.y && x >= shelf.x && x < shelf.x + shelfW) ||
-      (y === sign.y && x >= sign.x && x < sign.x + 4) ||
-      (seats[HIRE].x === x && seats[HIRE].y === y);
+      (y === sign.y && x >= sign.x && x < sign.x + 4);
     return blocked ? null : { x, y };
   };
   const dropSeat = () => {
@@ -132,7 +136,7 @@ export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk
         className="room-floor"
         style={{
           minWidth: cols * cell,
-          minHeight: rows * cell + 28, // + cho nhan duoi ban hang cuoi
+          minHeight: (rows + (size.h === 2 ? 3 : 0)) * cell + 28, // + cho nhan duoi ban hang cuoi
           backgroundImage: [theme.slots.wall, theme.slots[floor]].filter(Boolean).map((u) => `url(${u})`).join(","),
           backgroundRepeat: "repeat-x, repeat",
           backgroundSize: `${cell}px ${cell}px`,
@@ -189,9 +193,20 @@ export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk
           {/* rtl + ltr ben trong: path qua dai thi cat dau, giu ten thu muc cuoi */}
           <span className="shelf-label"><span dir="ltr">{dept.workspace || "Chon thu muc du an"}</span></span>
         </button>
-        <button className="seat hire" style={{ left: seats[HIRE].x * cell, top: seats[HIRE].y * cell }} title="Tuyển Agent mới cho phòng (qua HR)" onClick={onHire}>
-          + Tuyển
-        </button>
+        <button className="hire-btn" title="Tuyển Agent mới cho phòng (qua HR)" onClick={onHire}>+ Tuyển</button>
+        <div
+          className="room-grip"
+          title="Keo de doi kich thuoc phong (2 muc rong x 2 muc cao)"
+          onPointerDown={(e) => (e.currentTarget.setPointerCapture(e.pointerId), (grip.current = { x: e.clientX, y: e.clientY }))}
+          onPointerUp={(e) => {
+            const g = grip.current;
+            grip.current = null;
+            if (!g) return;
+            const dx = e.clientX - g.x, dy = e.clientY - g.y;
+            const next: Size = { w: Math.abs(dx) > 40 ? (dx > 0 ? 2 : 1) : size.w, h: Math.abs(dy) > 40 ? (dy > 0 ? 2 : 1) : size.h };
+            if (next.w !== size.w || next.h !== size.h) onSize(next);
+          }}
+        />
         {ghost && <div className="seat-ghost" style={{ left: ghost.x * cell, top: ghost.y * cell }} />}
         {staff.map((a) => {
             const s = seats[a.id];

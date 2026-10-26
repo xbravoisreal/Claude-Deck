@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { OfficePrefs } from "./Settings";
 import { ThemeCtx, themeVars, type Theme } from "./theme";
-import Room from "./Room";
+import Room, { roomSize } from "./Room";
 import AgentPanel from "./AgentPanel";
 import Candidates from "./Candidates";
 import Stats from "./Stats";
@@ -164,7 +164,7 @@ export default function Office({ prefs, tasks, ctx, tools, subs, onOpen, onOpenT
         {error && <div className="office-error" onClick={() => setError("")}>{error}</div>}
         {theme.errors.map((e) => <div key={e} className="office-error">theme: {e}</div>)}
         {depts.map((d) => (
-          <div key={d.id} data-dept={d.id} className={`room${d.agent_defs.length > 3 ? " wide" : ""}`}>
+          <div key={d.id} data-dept={d.id} className={`room${roomSize((d.room ?? {}) as object, d.agent_defs.length).w === 2 ? " wide" : ""}`}>
             {d.errors.map((e) => <div key={e} className="office-error room-err">{e}</div>)}
             <Room
               dept={d}
@@ -176,6 +176,7 @@ export default function Office({ prefs, tasks, ctx, tools, subs, onOpen, onOpenT
               onDesk={(a) => setPanel({ dept: d.id, agent: a.id })}
               onHistory={onHistory}
               onSeats={(seats) => safe(async () => (await invoke("office_save_room", { root: prefs.root, dept: d.id, room: { ...(d.room as object), seats: { ...(d.room as { seats?: object }).seats, ...seats } } }), reload()))}
+              onSize={(size) => safe(async () => (await invoke("office_save_room", { root: prefs.root, dept: d.id, room: { ...(d.room as object), size } }), reload()))}
               onRoomDrop={(x, y) => moveRoom(d.id, document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-dept]")?.dataset.dept)}
               onWorkspace={() => safe(() => pickWorkspace(d))}
               onHire={() => setHire({ dept: d, need: "" })}

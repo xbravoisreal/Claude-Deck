@@ -247,3 +247,7 @@ table.stats td:last-child { white-space: normal; }
 .seat.dragging { z-index: 10; cursor: grabbing; opacity: .85; pointer-events: none; }
 .seat-ghost { position: absolute; width: var(--o-cell); height: var(--o-cell); border: 2px dashed var(--o-accent); border-radius: 4px; z-index: 1; pointer-events: none; }
 .room-sign { cursor: grab; touch-action: none; user-select: none; }
+.hire-btn { position: absolute; right: 22px; bottom: 6px; z-index: 3; padding: 3px 8px; border: 2px dashed var(--o-muted); border-radius: 6px; background: color-mix(in srgb, var(--o-room) 85%, transparent); color: var(--o-muted); font-size: 11px; cursor: pointer; }
+.hire-btn:hover { color: var(--o-text); border-color: var(--o-accent); }
+.room-grip { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; z-index: 4; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 50%, var(--o-muted) 50%, var(--o-muted) 60%, transparent 60%, transparent 75%, var(--o-muted) 75%, var(--o-muted) 85%, transparent 85%); opacity: .7; }
+.room-grip:hover { opacity: 1; }
