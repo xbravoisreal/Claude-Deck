@@ -241,3 +241,5 @@ table.stats td:last-child { white-space: normal; }
 .board-row.off { opacity: .5; }
 .board-row .t { font-weight: 600; }
 .board-row .d { flex: 1; color: #888; font-size: 12px; }
+.assign > button, .ap-sub button { padding: 4px 10px; border: 1px solid var(--o-border, #454545); border-radius: 4px; color: var(--o-text, #d4d4d4); }
+.assign > button:hover, .ap-sub button:hover { background: var(--o-input, #3d3d3d); }
