@@ -106,16 +106,18 @@ export default function AgentPanel({ root, notes, dept, agent, tasks, onAssign, 
           </div>
         )}
         <div className="ap-sub">
-          Routine ({routines.length}) {!rform && status !== "retired" && <button onClick={() => setRform(blank)}>+ Them</button>}
+          Routine ({routines.length}) {!rform && status !== "retired" && <button onClick={() => setRform(blank)}>+ Thêm</button>}
         </div>
         {routines.map((r) => (
           <div key={r.id} className={`ap-routine${r.enabled ? "" : " off"}`}>
             <input type="checkbox" title="Bat/tat" checked={r.enabled} onChange={() => routine("routine_save", { routine: { ...r, enabled: !r.enabled } })} />
             <span className="t" title={r.prompt}>{r.title}</span>
-            <span className="d">{when(r)}{r.last ? ` · lần cuối ${new Date(r.last).toLocaleString()}` : ""}</span>
-            <button onClick={() => setRform(r)}>Sua</button>
-            <button onClick={() => invoke("routine_run", { root, dept: dept.id, id: r.id, notesRoot: notes || null }).then(() => (loadRoutines(), onTasks()), (e) => setError(String(e)))}>Chay ngay</button>
-            <button onClick={() => routine("routine_delete", { dept: dept.id, id: r.id })}>Xoa</button>
+            <span className="d">{when(r)}{r.last ? ` · lần cuối ${new Date(r.last).toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" })}` : ""}</span>
+            <span className="acts">
+            <button onClick={() => setRform(r)}>Sửa</button>
+            <button onClick={() => invoke("routine_run", { root, dept: dept.id, id: r.id, notesRoot: notes || null }).then(() => (loadRoutines(), onTasks()), (e) => setError(String(e)))}>Chạy ngay</button>
+            <button className="danger" onClick={() => routine("routine_delete", { dept: dept.id, id: r.id })}>Xóa</button>
+            </span>
           </div>
         ))}
         {rform && (
