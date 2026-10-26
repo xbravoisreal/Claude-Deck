@@ -228,7 +228,7 @@ pub fn mark_idle(t: &mut Task, stop: bool, ask: &str) {
         if t.status != "waiting" {
             t.ask.clear();
         } else if stop {
-            t.ask = ask.chars().take(1000).collect();
+            t.ask = ask.chars().take(3500).collect();
         }
     }
 }
@@ -364,6 +364,11 @@ pub fn task_create(root: String, dept: String, agent: String, title: String, bod
 
 #[tauri::command]
 pub fn task_idle(root: String, id: String, stop: bool, message: String) -> Result<Task, String> {
+    // Hook khong mang duoc cau cuoi cua Agent -> doc thang transcript cua phien (cau hoi dai khong bi mat).
+    let message = match load_tasks(Path::new(&root)).ok().and_then(|ts| ts.into_iter().find(|t| t.id == id)) {
+        Some(t) if stop && message.trim().is_empty() => project_dir(&t.cwd).map(|p| crate::pty::last_reply(&p.join(format!("{}.jsonl", t.session)).to_string_lossy())).unwrap_or_default(),
+        _ => message,
+    };
     update(&root, &id, |t| Ok(mark_idle(t, stop, &message)))
 }
 
@@ -448,6 +453,8 @@ pub struct Stats {
     pub max_tokens: u64,
     /// Ten tool Agent dang dung ("" neu dang viet/nghi).
     pub tool: String,
+    /// Agent con ma phien nay (Lead) da giao va chua tra ket qua (id Agent, vd "dev").
+    pub subs: Vec<String>,
 }
 
 /// context = do dai ngu canh cua luot cuoi; cache_read cong don, moi message.id tinh mot lan (stream ghi nhieu dong).
@@ -456,8 +463,20 @@ pub fn session_stats(jsonl: &Path) -> Stats {
     let mut st = Stats::default();
     let Ok(s) = std::fs::read_to_string(jsonl) else { return st };
     let mut seen = HashSet::new();
+    let mut pending: Vec<(String, String)> = vec![]; // (tool_use id, agent id) cua cac lan giao chua xong
     for line in s.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        for c in v["message"]["content"].as_array().into_iter().flatten() {
+            match c["type"].as_str() {
+                Some("tool_use") if matches!(c["name"].as_str(), Some("Agent" | "Task")) => {
+                    // subagent_type co the la "plugin:dev": lay phan sau dau ':'.
+                    let ty = c["input"]["subagent_type"].as_str().unwrap_or("");
+                    pending.push((c["id"].as_str().unwrap_or("").into(), ty.rsplit(':').next().unwrap_or(ty).into()));
+                }
+                Some("tool_result") => pending.retain(|(id, _)| Some(id.as_str()) != c["tool_use_id"].as_str()),
+                _ => {}
+            }
+        }
         let u = &v["message"]["usage"];
         if v["type"] != "assistant" || !u.is_object() {
             continue;
@@ -477,6 +496,7 @@ pub fn session_stats(jsonl: &Path) -> Stats {
             st.cache_read += g("cache_read_input_tokens");
         }
     }
+    st.subs = pending.into_iter().map(|(_, a)| a).collect();
     st
 }
 
@@ -696,6 +716,18 @@ mod tests {
         assert!(Path::new(&t2.cwd).join("moi.txt").exists());
         assert!(fs::read_to_string(Path::new(&t2.dir).join("brief.md")).unwrap().contains(&format!("Tham chieu\n\nLam tiep task {}", t.id)));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn session_stats_tracks_delegated_agents() {
+        let p = std::env::temp_dir().join("claudedeck-subs.jsonl");
+        let use_ = r#"{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"office:dev"}},{"type":"tool_use","id":"t2","name":"Agent","input":{"subagent_type":"qa"}}]}}"#;
+        let res = r#"{"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#;
+        fs::write(&p, format!("{use_}\n")).unwrap();
+        assert_eq!(session_stats(&p).subs, ["dev", "qa"]);
+        fs::write(&p, format!("{use_}\n{res}\n")).unwrap();
+        assert_eq!(session_stats(&p).subs, ["qa"]);
+        let _ = fs::remove_file(&p);
     }
 
     #[test]
@@ -936,7 +968,7 @@ mod tests {
         };
         let user = serde_json::json!({"type":"user","message":{"content":"hi"}}).to_string();
         fs::write(&p, [line("m1", 1, 100, 0), line("m1", 1, 100, 0), user, line("m2", 5, 300, 10), "hong".into()].join("\n")).unwrap();
-        assert_eq!(session_stats(&p), Stats { context: 315, cache_read: 400, max_tokens: 0, tool: String::new() });
+        assert_eq!(session_stats(&p), Stats { context: 315, cache_read: 400, max_tokens: 0, tool: String::new(), subs: vec![] });
         assert_eq!(session_stats(&root.join("none.jsonl")), Stats::default());
         let _ = fs::remove_dir_all(&root);
     }

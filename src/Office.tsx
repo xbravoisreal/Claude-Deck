@@ -31,8 +31,8 @@ export const bubble = (t: Task, tool?: string) =>
 const HR_ROOM = "__hr";
 
 /** Man Office: luoi phong pixel-art. Moi lan mo lai man nay doc lai department/room.json va theme. */
-export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDepts, onHistory }: {
-  prefs: OfficePrefs; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>;
+export default function Office({ prefs, tasks, ctx, tools, subs, onOpen, onTasks, onDepts, onHistory }: {
+  prefs: OfficePrefs; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>; subs: Record<string, string[]>;
   onOpen: (cwd: string, agent: AgentLaunch) => void; onTasks: () => void; onDepts: (d: Dept[]) => void; onHistory: () => void;
 }) {
   const [depts, setDepts] = useState<Dept[]>([]);
@@ -155,6 +155,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
               tasks={tasks}
               ctx={ctx}
               tools={tools}
+              delegated={tasks.filter((t) => t.dept === d.id && t.status === "running").flatMap((t) => subs[t.id] ?? [])}
               warnK={prefs.warnK}
               onDesk={(a) => setPanel({ dept: d.id, agent: a.id })}
               onHistory={onHistory}

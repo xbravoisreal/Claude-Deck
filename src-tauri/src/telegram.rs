@@ -169,7 +169,7 @@ pub fn waiting_message(agent: &str, dept: &str, t: &Task, permission: bool) -> (
         text += &format!("\nLý do: {}", escape(&clip(&t.reason, 200)));
     }
     if !t.ask.is_empty() {
-        text += &format!("\n💬 {}", escape(&clip(&t.ask, 800)));
+        text += &format!("\n💬 {}", escape(&clip(&t.ask, 2500)));
     }
     if !permission {
         text += "

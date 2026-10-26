@@ -55,8 +55,8 @@ const ago = (ms: number) => {
   return m < 1 ? "vua xong" : m < 60 ? `${m} phut` : `${Math.round(m / 60)} gio`;
 };
 
-export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory, onWorkspace, onHire, onSignMenu }: {
-  dept: Dept; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>; warnK: number;
+export default function Room({ dept, tasks, ctx, tools, delegated, warnK, onDesk, onHistory, onWorkspace, onHire, onSignMenu }: {
+  dept: Dept; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>; delegated: string[]; warnK: number;
   onDesk: (a: AgentDef) => void; onHistory: () => void; onWorkspace: () => void; onHire: () => void; onSignMenu: (x: number, y: number) => void;
 }) {
   const theme = useTheme()!;
@@ -149,6 +149,8 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
         {staff.map((a) => {
             const s = seats[a.id];
             const t = current(a.id);
+            // Lead dang giao viec cho Agent nay (subagent) -> ngoi go phim du khong co task rieng.
+            const sub = !t && delegated.includes(a.id);
             const warn = t && (ctx[t.id] ?? 0) >= warnK * 1000;
             return (
               <button
@@ -158,9 +160,10 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
                 title={warn ? "phien dai, nen tach task" : `${a.name}: ${a.description}`}
                 onClick={() => onDesk(a)}
               >
-                <Sprite slot={charSlot(s.character?.replace(/^character\./, ""), a.id, pose(t))} style={{ top: px(theme.sprite.characterY) }} />
+                <Sprite slot={charSlot(s.character?.replace(/^character\./, ""), a.id, sub ? "typing" : pose(t))} style={{ top: px(theme.sprite.characterY) }} />
                 <Sprite slot="desk" style={{ top: px(theme.sprite.deskY) }} />
                 {t && <span className={`bubble ${t.status}`} style={{ bottom: `calc(100% + ${6 - Math.min(0, px(theme.sprite.characterY))}px)` }}>{t.status === "waiting" ? "Chờ síp trả lời" : bubble(t, tools[t.id])}</span>}
+                {sub && <span className="bubble running" style={{ bottom: `calc(100% + ${6 - Math.min(0, px(theme.sprite.characterY))}px)` }}>Đang làm (Lead giao)</span>}
                 <span className="seat-label">
                   <b>{a.name}</b>
                   {status(a.id) === "probation" && <span className="probation">Thử việc</span>}

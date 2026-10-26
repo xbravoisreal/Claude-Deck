@@ -164,14 +164,16 @@ pub fn pty_resize(state: State<Sessions>, id: String, cols: u16, rows: u16) -> R
 pub fn parse_signal(req: &str) -> Option<(String, String, String)> {
     let path = req.lines().next()?.split_whitespace().nth(1)?.trim_start_matches('/');
     let (id, kind) = path.split_once('/').unwrap_or((path, "stop"));
+    // Bo BOM/rac truoc dau { (hook chay qua PowerShell co the them BOM): JSON hong thi mat luon cau hoi cua Agent.
     let body = req.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+    let body = body.find('{').map_or(body, |i| &body[i..]);
     let v = serde_json::from_str::<serde_json::Value>(body).unwrap_or_default();
     let msg = v["message"].as_str().map(String::from).or_else(|| v["transcript_path"].as_str().map(last_reply)).unwrap_or_default();
     Some((id.into(), kind.into(), msg))
 }
 
 /// Chu cua tin assistant cuoi cung trong transcript JSONL (rong neu khong doc duoc).
-fn last_reply(path: &str) -> String {
+pub(crate) fn last_reply(path: &str) -> String {
     let Ok(s) = std::fs::read_to_string(path) else { return String::new() };
     s.lines()
         .rev()

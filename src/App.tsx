@@ -13,7 +13,7 @@ import { TaskBoard, RoutineBoard } from "./Board";
 /** task: id task Office gan voi tab (pane chat co dinh `${id}-chat-0`). */
 type Ws = { id: string; cwd: string; agent?: AgentLaunch; task?: string };
 type Started = { task: Task; label: string; args: string; settings: unknown };
-type Stats = { context: number; cache_read: number; max_tokens: number; tool: string };
+type Stats = { context: number; cache_read: number; max_tokens: number; tool: string; subs: string[] };
 type Chat = { n: number; args?: string };
 type Entry = { id: string; title: string; modified: number };
 type Prefs = { model: string; auto: boolean };
@@ -129,6 +129,7 @@ export default function App() {
   const [drawer, setDrawer] = useState<false | "pending" | "history">(false);
   const [ctx, setCtx] = useState<Record<string, number>>({});
   const [tools, setTools] = useState<Record<string, string>>({});
+  const [subs, setSubs] = useState<Record<string, string[]>>({});
   const [taskErr, setTaskErr] = useState("");
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -354,6 +355,7 @@ export default function App() {
         if (!st) continue;
         setCtx((c) => ({ ...c, [ws.task!]: st.context }));
         setTools((m) => ({ ...m, [ws.task!]: st.tool }));
+        setSubs((m) => ({ ...m, [ws.task!]: st.subs }));
         const t = tasksRef.current.find((x) => x.id === ws.task);
         if (st.context >= 250_000) notify(ws.task!, "context");
         if (t?.status === "running" && st.cache_read > st.max_tokens) {
@@ -364,7 +366,7 @@ export default function App() {
           refresh();
         }
       }
-    }, 20000);
+    }, 8000);
     return () => clearInterval(iv);
   }, []);
 
@@ -431,6 +433,7 @@ export default function App() {
           tasks={tasks}
           ctx={ctx}
           tools={tools}
+          subs={subs}
           onHistory={() => setDrawer("history")}
           onOpen={openAgent}
           onTasks={startNext}
