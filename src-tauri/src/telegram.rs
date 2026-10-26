@@ -25,6 +25,8 @@ pub enum Action {
     Skip,
     /// /duan: chon phong de doi du an.
     Projects,
+    /// /trang-thai: tom tat Agent dang lam va task vua xong.
+    Status,
     /// Da chon phong, cho chon/go ten du an.
     PickDept(String),
     /// (phong, ten du an trong thu muc goc) - chua co thi tao moi.
@@ -106,6 +108,9 @@ pub fn parse_update(u: &Value, chat_id: i64, st: &mut Chat) -> (Action, Option<S
     let text = m["text"].as_str().map(str::trim).unwrap_or("");
     if text == "/duan" || text.starts_with("/duan@") {
         return (Action::Projects, None);
+    }
+    if matches!(text.split('@').next(), Some("/trang-thai" | "/trang_thai" | "/trangthai")) {
+        return (Action::Status, None);
     }
     if text.is_empty() || text.starts_with('/') {
         return (Action::Ignore, None);
@@ -258,6 +263,72 @@ fn names(root: &str, t: &Task) -> (String, String) {
     (agent, d.map_or(t.dept.clone(), |d| d.config.name))
 }
 
+/// Tom tat cho /trang-thai: Agent dang lam (theo phong, kem Agent con Lead da giao) va task vua xong.
+/// `subs`: id task -> Agent con dang chay.
+pub fn status_report(depts: &[crate::office::Department], ts: &[Task], subs: &dyn Fn(&Task) -> Vec<String>) -> String {
+    let now = chrono::Local::now().timestamp_millis();
+    let ago = |ms: i64| match (now - ms) / 60000 {
+        m if m < 1 => "vừa xong".to_string(),
+        m if m < 60 => format!("{m} phút trước"),
+        m if m < 1440 => format!("{} giờ trước", m / 60),
+        m => format!("{} ngày trước", m / 1440),
+    };
+    let name = |t: &Task| {
+        let d = depts.iter().find(|d| d.config.id == t.dept);
+        let a = d.and_then(|d| d.agent_defs.iter().find(|a| a.id == t.agent)).map_or(t.agent.clone(), |a| a.name.clone());
+        (a, d.map_or(t.dept.clone(), |d| format!("{} {}", d.config.icon, d.config.name)))
+    };
+    let mut out = String::new();
+    let live: Vec<&Task> = ts.iter().filter(|t| ["running", "waiting", "review"].contains(&t.status.as_str())).collect();
+    out += "<b>Đang làm việc</b>
+";
+    if live.is_empty() {
+        out += "Không có Agent nào đang làm.
+";
+    }
+    for t in &live {
+        let (a, d) = name(t);
+        let st = match t.status.as_str() {
+            "running" => "🔵 đang làm",
+            "waiting" => "🟡 chờ síp trả lời",
+            _ => "🟠 chờ síp duyệt",
+        };
+        out += &format!("{st} · <b>{}</b> ({}) · {}", escape(&a), escape(&d), escape(&clip(&t.title, 60)));
+        let s = if t.status == "running" { subs(t) } else { vec![] };
+        if !s.is_empty() {
+            out += &format!(" → giao cho {}", escape(&s.join(", ")));
+        }
+        out += "
+";
+    }
+    let queued = ts.iter().filter(|t| t.status == "backlog").count();
+    if queued > 0 {
+        out += &format!("⏳ {queued} task trong hàng đợi
+");
+    }
+    let mut done: Vec<&Task> = ts.iter().filter(|t| t.status == "done" && t.reason != "da huy").collect();
+    done.sort_by_key(|t| std::cmp::Reverse(t.finished.max(t.created)));
+    out += "
+<b>Đã xong gần đây</b>
+";
+    if done.is_empty() {
+        out += "Chưa có task nào xong.
+";
+    }
+    for t in done.iter().take(8) {
+        let (a, _) = name(t);
+        let sum = tasks::summary(&t.dir).lines().next().unwrap_or("").to_string();
+        out += &format!("✅ {} · <b>{}</b> · {}", escape(&clip(&t.title, 60)), escape(&a), ago(t.finished.max(t.created)));
+        if !sum.is_empty() {
+            out += &format!("
+    {}", escape(&clip(&sum, 140)));
+        }
+        out += "
+";
+    }
+    out
+}
+
 fn find(root: &str, id: &str) -> Option<Task> {
     tasks::load_tasks(Path::new(root)).ok()?.into_iter().find(|t| t.id == id)
 }
@@ -354,6 +425,12 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
                 let _ = send(c, &format!("📌 Giao cho ai?
 {}", escape(&clip(&text, 300))), &json!({ "inline_keyboard": rows }));
             }
+        }
+        Action::Status => {
+            let ts = tasks::load_tasks(Path::new(&c.root)).unwrap_or_default();
+            let root = c.root.clone();
+            let text = status_report(&load_office(Path::new(&c.root)), &ts, &|t| tasks::task_stats(root.clone(), t.id.clone()).map(|s| s.subs).unwrap_or_default());
+            let _ = send(c, &clip(&text, 3900), &json!({}));
         }
         Action::Projects => {
             let rows: Vec<Value> = load_office(Path::new(&c.root))
@@ -461,7 +538,7 @@ pub fn confirm_offset() {
 /// Vong long-polling getUpdates. Loi mang/token -> cho 5s, 10s... toi da 60s. Chi vong dang song moi ghi trang thai.
 fn poll(app: AppHandle, c: Cfg, gen: u64) {
     let (mut chat, mut wait) = (Chat::default(), 5u64);
-    let _ = api(&c.token, "setMyCommands", json!({ "commands": [{ "command": "duan", "description": "Đổi dự án của phòng" }] }));
+    let _ = api(&c.token, "setMyCommands", json!({ "commands": [{ "command": "duan", "description": "Đổi dự án của phòng" }, { "command": "trang_thai", "description": "Tóm tắt Agent đang làm và task đã xong" }] }));
     let live = || GEN.load(Ordering::SeqCst) == gen;
     while live() {
         let off = OFFSET.load(Ordering::SeqCst);
@@ -704,6 +781,16 @@ mod tests {
     #[test]
     fn project_flow_pick_room_then_name() {
         let mut st = Chat { pending_task: Some("x".into()), ..Default::default() };
+        for c in ["/trang-thai", "/trang_thai", "/trangthai@Claudeck17_bot"] {
+            assert_eq!(parse_update(&msg(ME, Some(c)), ME, &mut st).0, Action::Status);
+        }
+        let t = |id: &str, status: &str| -> Task {
+            serde_json::from_value(json!({ "id": id, "dept": "d", "agent": "dev", "title": format!("viec <{id}>"), "status": status, "session": "s", "dir": "/nope", "cwd": "/nope", "created": 0, "finished": 1 })).unwrap()
+        };
+        let r = status_report(&[], &[t("a", "running"), t("b", "review"), t("c", "done"), t("d", "backlog")], &|t| if t.id == "a" { vec!["qa".into()] } else { vec![] });
+        for k in ["đang làm", "giao cho qa", "chờ síp duyệt", "1 task trong hàng đợi", "Đã xong gần đây", "viec &lt;c&gt;"] {
+            assert!(r.contains(k), "{k} / {r}");
+        }
         assert_eq!(parse_update(&msg(ME, Some("/duan")), ME, &mut st).0, Action::Projects);
         assert_eq!(parse_update(&msg(ME, Some("/duan@Claudeck17_bot")), ME, &mut st).0, Action::Projects);
         assert_eq!(parse_update(&cb(ME, "pd:software-dev"), ME, &mut st).0, Action::PickDept("software-dev".into()));
