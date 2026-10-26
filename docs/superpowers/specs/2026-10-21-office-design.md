@@ -140,6 +140,7 @@ Mỗi giai đoạn chạy được, kiểm được, commit riêng.
 3. **Màn Office pixel-art + theme:** lưới phòng, bàn, bóng thoại, `theme.json`, `room.json`, theme mặc định. *Xong khi:* đổi theme hoặc sửa `room.json` thay đổi hình ảnh mà không đụng code.
 4. **Telegram:** gửi và duyệt từ điện thoại, thu nhỏ xuống khay. *Xong khi:* duyệt một task từ điện thoại và app cập nhật.
 5. **HR:** Recruiter, quy trình 6 bước của plan v2 mục 4, ứng viên chờ duyệt, thử việc, onboard, cho nghỉ. *Xong khi:* tuyển được một Agent mới và giao việc được cho nó.
+7. **Mở phòng ban** (plan v2 giai đoạn 6, 2026-10-26): template phòng là dữ liệu ở `<root>/templates/departments/<id>/` (department.json + agents/*.md + room.json; seed sẵn `software-dev`, `media-content`), nút + chọn template hoặc phòng trống; phòng trống có thể "Nhờ HR đề xuất đội hình" (task Recruiter, ứng viên đầu tiên được nhận thành lead). Agent từ template là `active` (template do chủ app giữ). *Xong khi:* mở được phòng Media Content không sửa code.
 6. ~~Hook~~: **bỏ giai đoạn này.** `pty.rs` đã tiêm hook `Stop`/`Notification` theo từng phiên qua `--settings` về server loopback; giai đoạn 2 dùng luôn tín hiệu đó (không cài hook toàn cục).
 
 **Thử việc HR:** ClaudeDeck (không phải Recruiter) chạy ứng viên bằng `claude -p --agents <json> --agent <id> --max-budget-usd 0.5` trong thư mục nháp `office/hr/probation/<candidate-id>/`. Recruiter ghi task mẫu vào hồ sơ ứng viên (`candidates/<id>/sample-task.md`); kết quả, số lượt, token được ghi vào hồ sơ để sếp xem.

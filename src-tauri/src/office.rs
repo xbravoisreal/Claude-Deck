@@ -158,6 +158,20 @@ const SEED: &[(&str, &str)] = &[
     ("departments/software-dev/room.json", include_str!("../office-seed/departments/software-dev/room.json")),
     ("departments/hr/room.json", include_str!("../office-seed/departments/hr/room.json")),
     ("themes/README.md", include_str!("../office-seed/themes/README.md")),
+    // Template phong (nut + "Mo phong moi"): them thu muc vao templates/departments la co template moi, khong sua code.
+    ("templates/departments/software-dev/department.json", include_str!("../office-seed/departments/software-dev/department.json")),
+    ("templates/departments/software-dev/room.json", include_str!("../office-seed/departments/software-dev/room.json")),
+    ("templates/departments/software-dev/agents/tech-lead.md", include_str!("../office-seed/departments/software-dev/agents/tech-lead.md")),
+    ("templates/departments/software-dev/agents/dev.md", include_str!("../office-seed/departments/software-dev/agents/dev.md")),
+    ("templates/departments/software-dev/agents/reviewer.md", include_str!("../office-seed/departments/software-dev/agents/reviewer.md")),
+    ("templates/departments/software-dev/agents/qa.md", include_str!("../office-seed/departments/software-dev/agents/qa.md")),
+    ("templates/departments/media-content/department.json", include_str!("../office-seed/templates/departments/media-content/department.json")),
+    ("templates/departments/media-content/room.json", include_str!("../office-seed/templates/departments/media-content/room.json")),
+    ("templates/departments/media-content/agents/strategist.md", include_str!("../office-seed/templates/departments/media-content/agents/strategist.md")),
+    ("templates/departments/media-content/agents/scriptwriter.md", include_str!("../office-seed/templates/departments/media-content/agents/scriptwriter.md")),
+    ("templates/departments/media-content/agents/video-editor.md", include_str!("../office-seed/templates/departments/media-content/agents/video-editor.md")),
+    ("templates/departments/media-content/agents/social-poster.md", include_str!("../office-seed/templates/departments/media-content/agents/social-poster.md")),
+    ("templates/departments/media-content/agents/analyst.md", include_str!("../office-seed/templates/departments/media-content/agents/analyst.md")),
 ];
 
 /// Ghi du lieu mac dinh, chi nhung file chua ton tai (khong de len ban nguoi dung da sua).
@@ -196,10 +210,63 @@ fn write_department(dir: &Path, c: &DeptConfig) -> std::io::Result<()> {
     std::fs::write(dir.join("department.json"), serde_json::to_string_pretty(&v)?)
 }
 
-/// Tao phong moi (nut + tren man Office): thu muc theo ten (chu thuong, khong dau cach), department.json, room.json.
-/// Tra ve id phong. Agent them sau (sua department.json hoac qua HR).
+fn templates_dir(root: &Path) -> std::path::PathBuf {
+    root.join("templates").join("departments")
+}
+
+/// Template phong: `<root>/templates/departments/<id>/` gom department.json (lead, agents, status), agents/*.md, room.json.
+#[derive(Serialize)]
+pub struct Template {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub mission: String,
+    pub agents: Vec<String>,
+}
+
 #[tauri::command]
-pub fn office_create_department(root: String, name: String, icon: String, mission: String) -> Result<String, String> {
+pub fn office_templates(root: String) -> Vec<Template> {
+    let Ok(rd) = std::fs::read_dir(templates_dir(Path::new(&root))) else { return vec![] };
+    let mut out: Vec<Template> = rd
+        .flatten()
+        .filter_map(|e| {
+            let id = e.file_name().into_string().ok().filter(|id| crate::hr::valid_id(id))?;
+            let c: DeptConfig = serde_json::from_str(&std::fs::read_to_string(e.path().join("department.json")).ok()?).ok()?;
+            Some(Template { id, name: c.name, icon: c.icon, mission: c.mission, agents: c.agents })
+        })
+        .collect();
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// Doc het template vao bo nho truoc khi tao phong: template hong thi khong de lai phong do dang.
+fn read_template(root: &Path, tid: &str) -> Result<(DeptConfig, Vec<(String, String)>, Option<String>), String> {
+    let dir = templates_dir(root).join(tid);
+    if !crate::hr::valid_id(tid) || !dir.is_dir() {
+        return Err(format!("khong co template {tid}"));
+    }
+    let c: DeptConfig = serde_json::from_str(&std::fs::read_to_string(dir.join("department.json")).map_err(|e| format!("template {tid}: {e}"))?).map_err(|e| format!("template {tid}: {e}"))?;
+    if !c.agents.contains(&c.lead) {
+        return Err(format!("template {tid}: lead '{}' khong nam trong agents", c.lead));
+    }
+    let mut agents = vec![];
+    for a in &c.agents {
+        if !crate::hr::valid_id(a) {
+            return Err(format!("template {tid}: agent id '{a}' khong hop le"));
+        }
+        let md = std::fs::read_to_string(dir.join("agents").join(format!("{a}.md"))).map_err(|e| format!("template {tid}: {a}.md: {e}"))?;
+        parse_agent(a, &md)?;
+        agents.push((a.clone(), md));
+    }
+    Ok((c, agents, std::fs::read_to_string(dir.join("room.json")).ok()))
+}
+
+/// Tao phong moi (nut + tren man Office): thu muc theo ten (chu thuong, khong dau cach), department.json, room.json.
+/// Co `template` thi chep doi hinh (agent, lead, trang thai) va room.json cua template; khong thi phong trong,
+/// Agent them sau (sua department.json hoac qua HR).
+#[tauri::command]
+pub fn office_create_department(root: String, name: String, icon: String, mission: String, template: Option<String>) -> Result<String, String> {
+    let tpl = template.filter(|t| !t.is_empty()).map(|t| read_template(Path::new(&root), &t)).transpose()?;
     let mut id = String::new();
     for c in name.trim().to_lowercase().chars() {
         if c.is_ascii_alphanumeric() {
@@ -218,14 +285,24 @@ pub fn office_create_department(root: String, name: String, icon: String, missio
     }
     std::fs::create_dir_all(&dir).map_err(err)?;
     let icon = if icon.trim().is_empty() { "🏢".into() } else { icon.trim().into() };
-    write_department(&dir, &DeptConfig { id: id.clone(), name: name.trim().into(), icon, mission: mission.trim().into(), ..Default::default() }).map_err(err)?;
-    let room = serde_json::json!({
+    let mut config = DeptConfig { id: id.clone(), name: name.trim().into(), icon, mission: mission.trim().into(), ..Default::default() };
+    let mut room = serde_json::to_string_pretty(&serde_json::json!({
         "cols": 6, "rows": 4, "floor": "floor.wood",
         "sign": { "x": 0, "y": 0 }, "workspace": { "x": 3, "y": 0, "w": 3 },
         "decor": [{ "slot": "decor.plant", "x": 5, "y": 3 }],
         "seats": {}
-    });
-    std::fs::write(dir.join("room.json"), serde_json::to_string_pretty(&room).map_err(err)?).map_err(err)?;
+    }))
+    .map_err(err)?;
+    if let Some((t, agents, t_room)) = tpl {
+        std::fs::create_dir_all(dir.join("agents")).map_err(err)?;
+        for (a, md) in agents {
+            std::fs::write(dir.join("agents").join(format!("{a}.md")), md).map_err(err)?;
+        }
+        (config.lead, config.agents, config.status) = (t.lead, t.agents, t.status);
+        room = t_room.unwrap_or(room);
+    }
+    write_department(&dir, &config).map_err(err)?;
+    std::fs::write(dir.join("room.json"), room).map_err(err)?;
     Ok(id)
 }
 
@@ -511,14 +588,37 @@ mod tests {
     fn create_department_writes_files() {
         let root = tmp("newdept");
         let r = root.to_string_lossy().to_string();
-        let id = office_create_department(r.clone(), "Content Media!".into(), "🎬".into(), "Lam video".into()).unwrap();
+        let id = office_create_department(r.clone(), "Content Media!".into(), "🎬".into(), "Lam video".into(), None).unwrap();
         assert_eq!(id, "content-media");
         let d = load_office(&root).into_iter().find(|d| d.config.id == id).unwrap();
         assert_eq!((d.config.name.as_str(), d.config.icon.as_str(), d.config.mission.as_str()), ("Content Media!", "🎬", "Lam video"));
         assert!(d.errors.is_empty());
         assert_eq!(d.room["workspace"]["w"], 3);
-        assert!(office_create_department(r.clone(), "content media".into(), "".into(), "".into()).is_err()); // trung
-        assert!(office_create_department(r, "!!!".into(), "".into(), "".into()).is_err()); // ten rong sau khi lam sach
+        assert!(office_create_department(r.clone(), "content media".into(), "".into(), "".into(), None).is_err()); // trung
+        assert!(office_create_department(r, "!!!".into(), "".into(), "".into(), None).is_err()); // ten rong sau khi lam sach
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn create_department_from_seeded_templates() {
+        let root = tmp("tpl");
+        let r = root.to_string_lossy().to_string();
+        seed_office(&root).unwrap();
+        let ts = office_templates(r.clone());
+        assert_eq!(ts.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["media-content", "software-dev"]);
+        assert_eq!(ts[0].agents.len(), 5);
+        let id = office_create_department(r.clone(), "Video Ngan".into(), "🎬".into(), "".into(), Some("media-content".into())).unwrap();
+        let d = load_office(&root).into_iter().find(|d| d.config.id == id).unwrap();
+        assert!(d.errors.is_empty(), "{:?}", d.errors);
+        assert_eq!((d.config.lead.as_str(), d.agent_defs.len()), ("strategist", 5));
+        assert_eq!(agent_status(&d.config, "analyst"), "active");
+        assert_eq!(d.room["seats"]["analyst"]["x"], 8);
+        assert!(d.agent_defs.iter().all(|a| safe_tools(&a.tools).len() == a.tools.len() && !a.tools.is_empty()));
+        // Template sai / thieu agent -> loi, khong de lai phong do dang.
+        assert!(office_create_department(r.clone(), "X".into(), "".into(), "".into(), Some("../hr".into())).is_err());
+        fs::remove_file(root.join("templates/departments/software-dev/agents/qa.md")).unwrap();
+        assert!(office_create_department(r, "Y".into(), "".into(), "".into(), Some("software-dev".into())).unwrap_err().contains("qa.md"));
+        assert!(!root.join("departments/y").exists());
         fs::remove_dir_all(&root).unwrap();
     }
 

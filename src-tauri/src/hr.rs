@@ -256,6 +256,10 @@ pub fn hr_hire(root: String, cid: String) -> Result<(), String> {
             Some(a) => a.push(cid.clone().into()),
             None => v["agents"] = serde_json::json!([cid]),
         }
+        // Phong moi do HR dung chua co lead: nguoi dau tien duoc nhan lam lead (dieu phoi, nhan task giao cho phong).
+        if v["lead"].as_str().unwrap_or("").is_empty() {
+            v["lead"] = cid.clone().into();
+        }
         v["status"][&cid] = "probation".into();
         v["budget"][&cid] = PROBATION_BUDGET.into();
         Ok(())
@@ -598,6 +602,21 @@ mod tests {
         let hired: Vec<_> = fs::read_dir(candidates_dir(&root).join("_hired")).unwrap().flatten().collect();
         assert_eq!(hired.len(), 1);
         assert!(hired[0].path().join("agent.md").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn first_hire_leads_empty_room() {
+        let root = tmp("hire-lead");
+        let r = root.to_string_lossy().to_string();
+        crate::office::seed_office(&root).unwrap();
+        crate::office::office_create_department(r.clone(), "Video".into(), "".into(), "".into(), None).unwrap();
+        candidate(&root, "writer", "video", MD);
+        candidate(&root, "second", "video", MD);
+        hr_hire(r.clone(), "writer".into()).unwrap();
+        hr_hire(r, "second".into()).unwrap();
+        let d = load_office(&root).into_iter().find(|d| d.config.id == "video").unwrap();
+        assert_eq!((d.config.lead.as_str(), d.agent_defs.len()), ("writer", 2));
         let _ = fs::remove_dir_all(&root);
     }
 

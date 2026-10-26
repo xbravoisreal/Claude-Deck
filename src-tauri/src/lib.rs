@@ -42,6 +42,7 @@ pub fn run() {
             office::office_set_workspace,
             office::office_launch,
             office::office_create_department,
+            office::office_templates,
             office::office_set_agent_status,
             hr::hr_candidates,
             hr::hr_request,

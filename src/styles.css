@@ -188,7 +188,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .room-add { position: fixed; left: 18px; bottom: 44px; z-index: 6; width: 44px; height: 44px; border-radius: 50%; border: 2px solid var(--o-accent); background: var(--o-room); color: var(--o-accent); font-size: 26px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.45); cursor: pointer; }
 .room-add:hover { background: var(--o-accent); color: var(--o-bubble-text); }
 .new-room { position: fixed; left: 18px; bottom: 98px; z-index: 6; width: 300px; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: var(--o-room); border: 1px solid var(--o-border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
-.new-room input { padding: 5px 8px; background: var(--o-input); color: var(--o-text); border: 1px solid var(--o-border); border-radius: 4px; font: inherit; min-width: 0; }
+.new-room input, .new-room select { padding: 5px 8px; background: var(--o-input); color: var(--o-text); border: 1px solid var(--o-border); border-radius: 4px; font: inherit; min-width: 0; }
+.new-room input[type="checkbox"] { padding: 0; vertical-align: middle; }
 .new-room-row { display: flex; gap: 6px; }
 .new-room-row input:last-child { flex: 1; }
 .new-room-icon { width: 44px; text-align: center; }

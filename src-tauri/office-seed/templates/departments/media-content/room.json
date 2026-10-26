@@ -1,0 +1,21 @@
+{
+  "cols": 10,
+  "rows": 4,
+  "floor": "floor.wood",
+  "sign": { "x": 0, "y": 0 },
+  "workspace": { "x": 7, "y": 0, "w": 3 },
+  "decor": [
+    { "slot": "decor.window", "x": 4, "y": 0 },
+    { "slot": "decor.board", "x": 5, "y": 0 },
+    { "slot": "decor.plant", "x": 0, "y": 1 },
+    { "slot": "decor.coffee", "x": 9, "y": 1 },
+    { "slot": "decor.lamp", "x": 9, "y": 3 }
+  ],
+  "seats": {
+    "strategist": { "x": 1, "y": 2, "character": "character.c5" },
+    "scriptwriter": { "x": 3, "y": 3, "character": "character.c6" },
+    "video-editor": { "x": 5, "y": 2, "character": "character.c1" },
+    "social-poster": { "x": 7, "y": 3, "character": "character.c2" },
+    "analyst": { "x": 8, "y": 2, "character": "character.c3" }
+  }
+}

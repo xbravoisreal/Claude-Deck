@@ -1,0 +1,11 @@
+{
+  "id": "media-content",
+  "name": "Media Content",
+  "icon": "🎬",
+  "mission": "San xuat noi dung video ngan: y tuong, kich ban, dung, caption, bao cao.",
+  "workspace": "",
+  "lead": "strategist",
+  "agents": ["strategist", "scriptwriter", "video-editor", "social-poster", "analyst"],
+  "status": { "strategist": "active", "scriptwriter": "active", "video-editor": "active", "social-poster": "active", "analyst": "active" },
+  "defaults": { "maxTokens": 4000000 }
+}

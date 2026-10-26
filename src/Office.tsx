@@ -13,6 +13,7 @@ export type Dept = {
   id: string; name: string; icon: string; mission: string; workspace: string; agent_defs: AgentDef[]; errors: string[];
   room: unknown; status?: Record<string, string>; budget?: Record<string, number>; defaults?: { maxTokens?: number };
 };
+export type Template = { id: string; name: string; icon: string; mission: string; agents: string[] };
 export type AgentLaunch = { label: string; args: string; settings: unknown };
 export type Task = {
   id: string; dept: string; agent: string; title: string; status: "backlog" | "running" | "waiting" | "review" | "done";
@@ -35,7 +36,8 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
   const [theme, setTheme] = useState<Theme | null>(null);
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<{ dept: string; agent: string } | null>(null);
-  const [newRoom, setNewRoom] = useState<{ name: string; icon: string; mission: string } | null>(null);
+  const [newRoom, setNewRoom] = useState<{ name: string; icon: string; mission: string; template: string; askHr: boolean } | null>(null);
+  const [templates, setTemplates] = useState<Template[]>([]);
   const [hire, setHire] = useState<{ dept: Dept; need: string } | null>(null);
 
   const reload = () =>
@@ -80,10 +82,27 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
   const createRoom = () =>
     safe(async () => {
       if (!newRoom?.name.trim()) return;
-      await invoke("office_create_department", { root: prefs.root, ...newRoom });
+      const { name, icon, mission, template, askHr } = newRoom;
+      const id = await invoke<string>("office_create_department", { root: prefs.root, name, icon, mission, template: template || null });
       setNewRoom(null);
       reload();
+      // Phong trong + nho HR: Recruiter de xuat doi hinh, nop moi Agent mot ho so; nguoi dau tien duoc nhan lam lead.
+      if (!template && askHr) {
+        const need = `Dựng đội hình cho phòng mới "${name.trim()}". Nhiệm vụ: ${mission.trim() || "(hỏi Síp)"}.
+Đề xuất 3–5 Agent, một Agent một việc, nộp mỗi Agent một hồ sơ ứng viên. Agent đầu tiên Síp nhận sẽ là trưởng phòng (điều phối, có tool Agent để gọi các Agent khác): ghi rõ trong reason hồ sơ nào nên nhận trước.`;
+        await invoke("hr_request", { root: prefs.root, dept: id, need, notesRoot: prefs.notes || null });
+        onTasks();
+      }
     });
+  const openNewRoom = () => {
+    if (newRoom) return setNewRoom(null);
+    setNewRoom({ name: "", icon: "🏢", mission: "", template: "", askHr: false });
+    invoke<Template[]>("office_templates", { root: prefs.root }).then(setTemplates, (e) => setError(String(e)));
+  };
+  const pickTemplate = (id: string) => {
+    const t = templates.find((t) => t.id === id);
+    setNewRoom((r) => r && (t ? { ...r, template: id, icon: t.icon, name: r.name || t.name, mission: r.mission || t.mission } : { ...r, template: "" }));
+  };
 
   // "+ Tuyen": giao yeu cau cho Recruiter phong HR.
   const recruit = () =>
@@ -132,12 +151,22 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
         {newRoom && (
           <div className="new-room">
             <b>Mo phong moi</b>
+            <select value={newRoom.template} onChange={(e) => pickTemplate(e.target.value)}>
+              <option value="">Phòng trống</option>
+              {templates.map((t) => <option key={t.id} value={t.id}>{t.icon} {t.name} · {t.agents.length} Agent</option>)}
+            </select>
             <div className="new-room-row">
               <input className="new-room-icon" value={newRoom.icon} onChange={(e) => setNewRoom({ ...newRoom, icon: e.target.value })} />
               <input autoFocus placeholder="Ten phong (vd Content Media)" value={newRoom.name} onChange={(e) => setNewRoom({ ...newRoom, name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && createRoom()} />
             </div>
             <input placeholder="Nhiem vu cua phong" value={newRoom.mission} onChange={(e) => setNewRoom({ ...newRoom, mission: e.target.value })} onKeyDown={(e) => e.key === "Enter" && createRoom()} />
+            {newRoom.template ? (
+              <div className="hint">Chép đội hình từ template: {templates.find((t) => t.id === newRoom.template)?.agents.join(", ")}</div>
+            ) : (
+              <label className="hint"><input type="checkbox" checked={newRoom.askHr} onChange={(e) => setNewRoom({ ...newRoom, askHr: e.target.checked })} /> Nhờ HR đề xuất đội hình (theo nhiệm vụ)</label>
+            )}
             <div className="set-actions">
+              <button onClick={() => reveal(`${prefs.root}\\templates\\departments`)}>Mo template</button>
               <button onClick={() => reveal(`${prefs.root}\\departments`)}>Mo thu muc</button>
               <button onClick={() => setNewRoom(null)}>Huy</button>
               <button className="primary" disabled={!newRoom.name.trim()} onClick={createRoom}>Tao</button>
@@ -156,7 +185,7 @@ export default function Office({ prefs, tasks, ctx, tools, onOpen, onTasks, onDe
             </div>
           </div>
         )}
-        <button className="room-add" title="Mo phong moi" onClick={() => setNewRoom(newRoom ? null : { name: "", icon: "🏢", mission: "" })}>+</button>
+        <button className="room-add" title="Mo phong moi" onClick={openNewRoom}>+</button>
         {pd && pa && <div className="drawer-backdrop" onClick={() => setPanel(null)} />}
         {pd && pa && (
           <AgentPanel
