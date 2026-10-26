@@ -93,6 +93,18 @@ fn exclude_office(ws: &Path) {
     }
 }
 
+/// Worktree moi khong co node_modules (gitignored) nen `npm run ...` khong chay duoc: noi junction ve ban cua workspace.
+/// ponytail: chi node_modules, khong chep .env; junction (khong can quyen admin), loi thi bo qua.
+fn link_node_modules(ws: &Path, tree: &Path) {
+    let src = ws.join("node_modules");
+    if src.is_dir() {
+        #[cfg(windows)]
+        let _ = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(tree.join("node_modules")).arg(&src).output();
+        #[cfg(not(windows))]
+        let _ = std::os::unix::fs::symlink(&src, tree.join("node_modules"));
+    }
+}
+
 pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: Option<&str>) -> Result<Task, String> {
     let ws = Path::new(&d.config.workspace);
     if d.config.workspace.is_empty() {
@@ -121,6 +133,7 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
     let cwd = if git(ws, &["rev-parse", "--is-inside-work-tree"]).is_ok() {
         git(ws, &["worktree", "add", &tree.to_string_lossy(), "-b", &format!("office/{id}")]).map_err(|e| format!("tao worktree loi: {e}"))?;
         exclude_office(ws);
+        link_node_modules(ws, &tree);
         tree
     } else {
         ws.to_path_buf()

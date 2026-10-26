@@ -329,6 +329,7 @@ export default function App() {
     if (tab) return activate(tab.id), setDrawer(false);
     try {
       addTab(tabFor(await invoke<Started>("task_resume", { root: root(), id: t.id, notesRoot: notesRoot() })), true);
+      unsent(t.id);
       setDrawer(false);
     } catch (e) {
       fail(e);
@@ -375,7 +376,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className={`tabs${split ? " split" : ""}`}>
+      <div className={`tabs${split ? " split" : ""}`} onMouseDown={(e) => !(e.target as Element).closest(".menu") && setDrawer(false)}>
         <div className="views">
           <button className={`menu${drawer ? " on" : ""}`} title="Cho duyet" onClick={() => setDrawer(drawer ? false : "pending")}>
             ☰{pending > 0 && <span className="badge">{pending}</span>}
