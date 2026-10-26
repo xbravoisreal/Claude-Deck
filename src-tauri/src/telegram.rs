@@ -21,6 +21,8 @@ pub enum Action {
     NewTask(String),
     /// (phong, agent, noi dung) sau khi bam nut chon agent.
     Assign(String, String, String),
+    /// Nut "Bo qua" duoi cau hoi giao cho ai.
+    Skip,
     /// /duan: chon phong de doi du an.
     Projects,
     /// Da chon phong, cho chon/go ten du an.
@@ -85,6 +87,10 @@ pub fn parse_update(u: &Value, chat_id: i64, st: &mut Chat) -> (Action, Option<S
                 }
                 None => Action::Ignore,
             },
+            "sk" => {
+                st.pending_task = None;
+                Action::Skip
+            }
             "as" => match (id.split_once('/'), st.pending_task.take()) {
                 (Some((dept, agent)), Some(text)) => Action::Assign(dept.into(), agent.into(), text),
                 _ => Action::Ignore,
@@ -335,11 +341,12 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
             let rows: Vec<Value> = load_office(Path::new(&c.root))
                 .iter()
                 .filter(|d| !d.config.workspace.is_empty())
-                .flat_map(|d| d.agent_defs.iter().map(move |a| (format!("{} · {}", a.name, d.config.name), format!("as:{}/{}", d.config.id, a.id))))
+                .flat_map(|d| d.agent_defs.iter().filter(|a| crate::office::agent_status(&d.config, &a.id) != "retired").map(move |a| (format!("{} · {}", a.name, d.config.name), format!("as:{}/{}", d.config.id, a.id))))
                 .filter(|(_, data)| data.len() <= 64)
                 .map(|(label, data)| json!([{ "text": label, "callback_data": data }]))
+                .chain([json!([{ "text": "✖ Bỏ qua", "callback_data": "sk:x" }])])
                 .collect();
-            if rows.is_empty() {
+            if rows.len() == 1 {
                 chat.pending_task = None;
                 let _ = send(c, "Chưa có phòng nào có thư mục dự án để giao việc.", &Value::Null);
             } else {
@@ -404,7 +411,7 @@ fn handle(app: &AppHandle, c: &Cfg, u: &Value, chat: &mut Chat) {
         }
         Action::Assign(dept, agent, text) => {
             let title = clip(text.lines().next().unwrap_or(""), 80);
-            match tasks::task_create(c.root.clone(), dept, agent, title, text, Some(c.notes.clone())) {
+            match tasks::task_create(c.root.clone(), dept, agent, title, text, Some(c.notes.clone()), None) {
                 Ok(t) => {
                     answer(c, &qid, "Đã giao");
                     let (agent, dept) = names(&c.root, &t);
@@ -417,6 +424,10 @@ Task: {}", escape(&agent), escape(&dept), escape(&t.title)));
                     edit(c, cb_msg, &format!("Không giao được: {}", escape(&e)));
                 }
             }
+        }
+        Action::Skip => {
+            answer(c, &qid, "Đã bỏ qua");
+            edit(c, cb_msg, "✖ Đã bỏ qua");
         }
         Action::Ignore => answer(c, &qid, ""),
     }
@@ -573,6 +584,16 @@ pub fn tg_notify(id: String, kind: String) {
 }
 
 /// Task da xu ly tren app -> sua tin con nut thanh `text`, bo nut.
+/// Tin thong bao khong nut (vd thu viec xong). Chua cau hinh bot thi bo qua.
+pub fn tg_say(text: String) {
+    std::thread::spawn(move || {
+        let Ok(c) = cfg() else { return };
+        if let Err(e) = send(&c, &text, &Value::Null) {
+            set_status(format!("loi gui tin: {e}"));
+        }
+    });
+}
+
 #[tauri::command]
 pub fn tg_resolved(id: String, text: String) {
     std::thread::spawn(move || {
@@ -710,6 +731,9 @@ mod tests {
         assert_eq!(parse_update(&cb(ME, "as:software-dev/dev"), ME, &mut st).0, Action::Assign("software-dev".into(), "dev".into(), "sua readme".into()));
         assert_eq!(parse_update(&cb(ME, "as:software-dev/dev"), ME, &mut st).0, Action::Ignore); // da giao, bam lai khong tao trung
         assert_eq!(parse_update(&cb(999, "as:software-dev/dev"), ME, &mut st).0, Action::Ignore);
+        parse_update(&msg(ME, Some("x")), ME, &mut st);
+        assert_eq!(parse_update(&cb(ME, "sk:x"), ME, &mut st).0, Action::Skip);
+        assert!(st.pending_task.is_none());
     }
 
     #[test]

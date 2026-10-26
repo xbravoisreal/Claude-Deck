@@ -21,7 +21,10 @@ export default function Settings({ value, onSave, onClose }: { value: OfficePref
   useEffect(() => {
     if (v.root) invoke<string[]>("theme_list", { root: v.root }).then(setThemes, () => {});
   }, [v.root]);
+  // Ghi thang vao registry khi bam (khong cho nut Luu).
+  const [autostart, setAutostart] = useState(false);
   useEffect(() => {
+    invoke<boolean>("autostart_get").then(setAutostart, () => {});
     invoke<boolean>("tg_has_token").then(setHasToken, () => {});
     invoke<string>("tg_status").then(setTg, () => {});
   }, []);
@@ -74,6 +77,11 @@ export default function Settings({ value, onSave, onClose }: { value: OfficePref
             </select>
             <button title="Copy default thanh thu muc moi de tao theme (xem README.md)" onClick={() => invoke("open_in_editor", { path: `${v.root}\\themes` }).catch(() => {})}>Mo thu muc theme</button>
           </div>
+        </label>
+
+        <label className="set-field set-check">
+          <input type="checkbox" checked={autostart} onChange={(e) => invoke("autostart_set", { on: e.target.checked }).then(() => setAutostart(!autostart), (err) => setTg(`loi: ${err}`))} />
+          <span>Chay cung Windows (vao thang khay; routine va bot chi chay khi app mo)</span>
         </label>
 
         <div className="set-sub">Telegram</div>

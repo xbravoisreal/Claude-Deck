@@ -7,5 +7,6 @@
   "lead": "tech-lead",
   "agents": ["tech-lead", "dev", "reviewer", "qa"],
   "status": { "tech-lead": "active", "dev": "active", "reviewer": "active", "qa": "active" },
-  "defaults": { "maxTokens": 4000000 }
+  "defaults": { "maxTokens": 4000000 },
+  "router": [{"match": ["typo", "chinh ta", "chính tả", "readme", "doi chu", "đổi chữ", "comment"], "model": "haiku"}, {"match": ["kien truc", "kiến trúc", "thiet ke he thong", "thiết kế hệ thống", "refactor lon", "refactor lớn"], "model": "opus"}]
 }

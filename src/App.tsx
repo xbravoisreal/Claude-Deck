@@ -329,6 +329,7 @@ export default function App() {
     if (tab) return activate(tab.id), setDrawer(false);
     try {
       addTab(tabFor(await invoke<Started>("task_resume", { root: root(), id: t.id, notesRoot: notesRoot() })), true);
+      unsent(t.id);
       setDrawer(false);
     } catch (e) {
       fail(e);
@@ -357,6 +358,15 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
+  // Routine: moi 30s hoi Rust co routine nao den gio -> tao task, chay theo hang doi nhu task thuong.
+  useEffect(() => {
+    if (!ready) return;
+    const iv = setInterval(() => {
+      invoke<Task[]>("routine_tick", { root: root(), notesRoot: notesRoot() }).then((ts) => void (ts.length > 0 && startNext()), fail);
+    }, 30000);
+    return () => clearInterval(iv);
+  }, [ready]);
+
   const openFolder = async () => {
     const cwd = await open({ directory: true });
     if (typeof cwd !== "string") return;
@@ -375,7 +385,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className={`tabs${split ? " split" : ""}`}>
+      <div className={`tabs${split ? " split" : ""}`} onMouseDown={(e) => !(e.target as Element).closest(".menu") && setDrawer(false)}>
         <div className="views">
           <button className={`menu${drawer ? " on" : ""}`} title="Cho duyet" onClick={() => setDrawer(drawer ? false : "pending")}>
             ☰{pending > 0 && <span className="badge">{pending}</span>}

@@ -26,9 +26,39 @@ pub struct DeptConfig {
     /// agent id -> active | probation | retired
     #[serde(default)]
     pub status: HashMap<String, String>,
+    /// agent id -> tran token doc cache rieng (Agent thu viec); thieu -> defaults.maxTokens.
+    #[serde(default)]
+    pub budget: HashMap<String, u64>,
     /// vd {"maxTokens": 4000000}
     #[serde(default)]
     pub defaults: serde_json::Value,
+    /// Chon model theo loai task (luat dau tien khop thang); khong luat nao khop -> model trong file Agent.
+    #[serde(default)]
+    pub router: Vec<Route>,
+}
+
+/// vd {"agent": "dev", "match": ["typo", "readme"], "model": "haiku"}; agent rong = moi Agent cua phong.
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct Route {
+    #[serde(default)]
+    pub agent: String,
+    #[serde(rename = "match")]
+    pub keywords: Vec<String>,
+    pub model: String,
+}
+
+/// Ten model di vao frontmatter plugin: alias (haiku, sonnet, opus) hoac id day du (claude-...).
+pub fn valid_model(m: &str) -> bool {
+    !m.is_empty() && m.len() <= 60 && m.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
+}
+
+/// Model cho task moi theo router cua phong ("" = model mac dinh cua Agent). So khop chu thuong, chua tu khoa.
+pub fn route(c: &DeptConfig, agent: &str, text: &str) -> String {
+    let text = text.to_lowercase();
+    c.router
+        .iter()
+        .find(|r| (r.agent.is_empty() || r.agent == agent) && valid_model(&r.model) && r.keywords.iter().map(|k| k.trim().to_lowercase()).any(|k| !k.is_empty() && text.contains(&k)))
+        .map_or(String::new(), |r| r.model.clone())
 }
 
 #[derive(Serialize, Clone)]
@@ -113,6 +143,11 @@ pub fn load_office(root: &Path) -> Vec<Department> {
     out
 }
 
+/// active | probation | retired (thieu = active).
+pub fn agent_status<'a>(c: &'a DeptConfig, id: &str) -> &'a str {
+    c.status.get(id).map_or("active", String::as_str)
+}
+
 /// Ten plugin tam; agent trong phien la `office:<id>`.
 const PLUGIN: &str = "office";
 
@@ -123,11 +158,12 @@ pub fn write_plugin(d: &Department, dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir.join(".claude-plugin"))?;
     std::fs::create_dir_all(dir.join("agents"))?;
     std::fs::write(dir.join(".claude-plugin").join("plugin.json"), serde_json::json!({ "name": PLUGIN, "version": "0.0.0" }).to_string())?;
-    for a in &d.agent_defs {
+    // Agent da nghi khong vao plugin: Lead khong goi duoc no lam subagent.
+    for a in d.agent_defs.iter().filter(|a| agent_status(&d.config, &a.id) != "retired") {
         let q = |s: &str| serde_json::Value::from(s).to_string();
         let mut head = format!("name: {}\ndescription: {}\n", a.id, q(&a.description));
         if !a.tools.is_empty() {
-            head += &format!("tools: {}\n", a.tools.join(", "));
+            head += &format!("tools: {}\n", safe_tools(&a.tools).join(", "));
         }
         if let Some(m) = &a.model {
             head += &format!("model: {m}\n");
@@ -149,6 +185,20 @@ const SEED: &[(&str, &str)] = &[
     ("departments/software-dev/room.json", include_str!("../office-seed/departments/software-dev/room.json")),
     ("departments/hr/room.json", include_str!("../office-seed/departments/hr/room.json")),
     ("themes/README.md", include_str!("../office-seed/themes/README.md")),
+    // Template phong (nut + "Mo phong moi"): them thu muc vao templates/departments la co template moi, khong sua code.
+    ("templates/departments/software-dev/department.json", include_str!("../office-seed/departments/software-dev/department.json")),
+    ("templates/departments/software-dev/room.json", include_str!("../office-seed/departments/software-dev/room.json")),
+    ("templates/departments/software-dev/agents/tech-lead.md", include_str!("../office-seed/departments/software-dev/agents/tech-lead.md")),
+    ("templates/departments/software-dev/agents/dev.md", include_str!("../office-seed/departments/software-dev/agents/dev.md")),
+    ("templates/departments/software-dev/agents/reviewer.md", include_str!("../office-seed/departments/software-dev/agents/reviewer.md")),
+    ("templates/departments/software-dev/agents/qa.md", include_str!("../office-seed/departments/software-dev/agents/qa.md")),
+    ("templates/departments/media-content/department.json", include_str!("../office-seed/templates/departments/media-content/department.json")),
+    ("templates/departments/media-content/room.json", include_str!("../office-seed/templates/departments/media-content/room.json")),
+    ("templates/departments/media-content/agents/strategist.md", include_str!("../office-seed/templates/departments/media-content/agents/strategist.md")),
+    ("templates/departments/media-content/agents/scriptwriter.md", include_str!("../office-seed/templates/departments/media-content/agents/scriptwriter.md")),
+    ("templates/departments/media-content/agents/video-editor.md", include_str!("../office-seed/templates/departments/media-content/agents/video-editor.md")),
+    ("templates/departments/media-content/agents/social-poster.md", include_str!("../office-seed/templates/departments/media-content/agents/social-poster.md")),
+    ("templates/departments/media-content/agents/analyst.md", include_str!("../office-seed/templates/departments/media-content/agents/analyst.md")),
 ];
 
 /// Ghi du lieu mac dinh, chi nhung file chua ton tai (khong de len ban nguoi dung da sua).
@@ -187,10 +237,63 @@ fn write_department(dir: &Path, c: &DeptConfig) -> std::io::Result<()> {
     std::fs::write(dir.join("department.json"), serde_json::to_string_pretty(&v)?)
 }
 
-/// Tao phong moi (nut + tren man Office): thu muc theo ten (chu thuong, khong dau cach), department.json, room.json.
-/// Tra ve id phong. Agent them sau (sua department.json hoac qua HR).
+fn templates_dir(root: &Path) -> std::path::PathBuf {
+    root.join("templates").join("departments")
+}
+
+/// Template phong: `<root>/templates/departments/<id>/` gom department.json (lead, agents, status), agents/*.md, room.json.
+#[derive(Serialize)]
+pub struct Template {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub mission: String,
+    pub agents: Vec<String>,
+}
+
 #[tauri::command]
-pub fn office_create_department(root: String, name: String, icon: String, mission: String) -> Result<String, String> {
+pub fn office_templates(root: String) -> Vec<Template> {
+    let Ok(rd) = std::fs::read_dir(templates_dir(Path::new(&root))) else { return vec![] };
+    let mut out: Vec<Template> = rd
+        .flatten()
+        .filter_map(|e| {
+            let id = e.file_name().into_string().ok().filter(|id| crate::hr::valid_id(id))?;
+            let c: DeptConfig = serde_json::from_str(&std::fs::read_to_string(e.path().join("department.json")).ok()?).ok()?;
+            Some(Template { id, name: c.name, icon: c.icon, mission: c.mission, agents: c.agents })
+        })
+        .collect();
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// Doc het template vao bo nho truoc khi tao phong: template hong thi khong de lai phong do dang.
+fn read_template(root: &Path, tid: &str) -> Result<(DeptConfig, Vec<(String, String)>, Option<String>), String> {
+    let dir = templates_dir(root).join(tid);
+    if !crate::hr::valid_id(tid) || !dir.is_dir() {
+        return Err(format!("khong co template {tid}"));
+    }
+    let c: DeptConfig = serde_json::from_str(&std::fs::read_to_string(dir.join("department.json")).map_err(|e| format!("template {tid}: {e}"))?).map_err(|e| format!("template {tid}: {e}"))?;
+    if !c.agents.contains(&c.lead) {
+        return Err(format!("template {tid}: lead '{}' khong nam trong agents", c.lead));
+    }
+    let mut agents = vec![];
+    for a in &c.agents {
+        if !crate::hr::valid_id(a) {
+            return Err(format!("template {tid}: agent id '{a}' khong hop le"));
+        }
+        let md = std::fs::read_to_string(dir.join("agents").join(format!("{a}.md"))).map_err(|e| format!("template {tid}: {a}.md: {e}"))?;
+        parse_agent(a, &md)?;
+        agents.push((a.clone(), md));
+    }
+    Ok((c, agents, std::fs::read_to_string(dir.join("room.json")).ok()))
+}
+
+/// Tao phong moi (nut + tren man Office): thu muc theo ten (chu thuong, khong dau cach), department.json, room.json.
+/// Co `template` thi chep doi hinh (agent, lead, trang thai) va room.json cua template; khong thi phong trong,
+/// Agent them sau (sua department.json hoac qua HR).
+#[tauri::command]
+pub fn office_create_department(root: String, name: String, icon: String, mission: String, template: Option<String>) -> Result<String, String> {
+    let tpl = template.filter(|t| !t.is_empty()).map(|t| read_template(Path::new(&root), &t)).transpose()?;
     let mut id = String::new();
     for c in name.trim().to_lowercase().chars() {
         if c.is_ascii_alphanumeric() {
@@ -209,28 +312,77 @@ pub fn office_create_department(root: String, name: String, icon: String, missio
     }
     std::fs::create_dir_all(&dir).map_err(err)?;
     let icon = if icon.trim().is_empty() { "🏢".into() } else { icon.trim().into() };
-    write_department(&dir, &DeptConfig { id: id.clone(), name: name.trim().into(), icon, mission: mission.trim().into(), ..Default::default() }).map_err(err)?;
-    let room = serde_json::json!({
+    let mut config = DeptConfig { id: id.clone(), name: name.trim().into(), icon, mission: mission.trim().into(), ..Default::default() };
+    let mut room = serde_json::to_string_pretty(&serde_json::json!({
         "cols": 6, "rows": 4, "floor": "floor.wood",
         "sign": { "x": 0, "y": 0 }, "workspace": { "x": 3, "y": 0, "w": 3 },
         "decor": [{ "slot": "decor.plant", "x": 5, "y": 3 }],
         "seats": {}
-    });
-    std::fs::write(dir.join("room.json"), serde_json::to_string_pretty(&room).map_err(err)?).map_err(err)?;
+    }))
+    .map_err(err)?;
+    if let Some((t, agents, t_room)) = tpl {
+        std::fs::create_dir_all(dir.join("agents")).map_err(err)?;
+        for (a, md) in agents {
+            std::fs::write(dir.join("agents").join(format!("{a}.md")), md).map_err(err)?;
+        }
+        (config.lead, config.agents, config.status) = (t.lead, t.agents, t.status);
+        room = t_room.unwrap_or(room);
+    }
+    write_department(&dir, &config).map_err(err)?;
+    std::fs::write(dir.join("room.json"), room).map_err(err)?;
     Ok(id)
 }
 
-/// Chi doi truong `workspace`, giu nguyen cac truong khac (ke ca truong nguoi dung tu them).
-#[tauri::command]
-pub fn office_set_workspace(root: String, dept: String, workspace: String) -> Result<(), String> {
-    let p = Path::new(&root).join("departments").join(&dept).join("department.json");
+/// Sua department.json qua Value: giu nguyen cac truong khac (ke ca truong nguoi dung tu them).
+pub fn edit_department(root: &Path, dept: &str, f: impl FnOnce(&mut serde_json::Value) -> Result<(), String>) -> Result<(), String> {
+    let p = root.join("departments").join(dept).join("department.json");
     let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).map_err(err)?).map_err(err)?;
-    v["workspace"] = workspace.into();
+    f(&mut v)?;
     std::fs::write(&p, serde_json::to_string_pretty(&v).map_err(err)?).map_err(err)
 }
 
+#[tauri::command]
+pub fn office_set_workspace(root: String, dept: String, workspace: String) -> Result<(), String> {
+    edit_department(Path::new(&root), &dept, |v| Ok(v["workspace"] = workspace.into()))
+}
+
+/// Chinh thuc (active, bo tran rieng) / thu viec / cho nghi. Cho nghi khi con task chua xong -> tu choi.
+#[tauri::command]
+pub fn office_set_agent_status(root: String, dept: String, agent: String, status: String) -> Result<(), String> {
+    if !["active", "probation", "retired"].contains(&status.as_str()) {
+        return Err(format!("trang thai khong hop le: {status}"));
+    }
+    let rp = Path::new(&root);
+    if status == "retired" && load_office(rp).iter().any(|d| d.config.id == dept && d.config.lead == agent) {
+        return Err(format!("{agent} la lead cua phong, khong cho nghi duoc"));
+    }
+    // Kiem tra task va ghi trong cung khoa tasks.json: task moi khong chen vao giua.
+    crate::tasks::with_tasks(rp, |ts| {
+        let open = ts.iter().filter(|t| t.dept == dept && t.agent == agent && t.status != "done").count();
+        if status == "retired" && open > 0 {
+            return Err(format!("{agent} con task chua xong ({open}): duyet hoac huy truoc"));
+        }
+        edit_department(rp, &dept, |v| set_status(v, &agent, &status))
+    })
+}
+
+fn set_status(v: &mut serde_json::Value, agent: &str, status: &str) -> Result<(), String> {
+    {
+        if !(v["status"].is_object() || v["status"].is_null()) {
+            return Err("department.json: status phai la object".into());
+        }
+        v["status"][agent] = status.into();
+        if status == "active" {
+            if let Some(b) = v.get_mut("budget").and_then(|b| b.as_object_mut()) {
+                b.remove(agent);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Cam cung cho moi phien Office (spec muc 5).
-const DENY_ALL: &[&str] = &[
+pub(crate) const DENY_ALL: &[&str] = &[
     "Bash(git push:*)",
     "Bash(rm -rf:*)",
     "Bash(Remove-Item:*)",
@@ -242,7 +394,16 @@ const DENY_ALL: &[&str] = &[
 ];
 const DENY_REVIEWER: &[&str] = &["Edit", "Write", "NotebookEdit"];
 
-#[derive(Serialize)]
+/// Ten tool di vao dong lenh (PowerShell / cmd): chi giu ky tu an toan, bo tool la (vd do Recruiter viet "Read; Remove-Item ...").
+pub fn safe_tools(tools: &[String]) -> Vec<&str> {
+    tools
+        .iter()
+        .map(String::as_str)
+        .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_alphanumeric() || "_-:*.() /".contains(c)))
+        .collect()
+}
+
+#[derive(Serialize, Debug)]
 pub struct LaunchSpec {
     /// Tham so them cho `claude` (pty_spawn dat sau `--settings`).
     pub args: String,
@@ -253,12 +414,21 @@ pub struct LaunchSpec {
 /// Agent di qua plugin dir (file), khong qua chuoi tham so: PowerShell 5.1 lam hong dau `"` khi truyen cho exe.
 pub fn launch_spec(d: &Department, agent_id: &str, plugin_dir: &Path, notes_root: Option<&str>) -> Result<LaunchSpec, String> {
     let agent = d.agent_defs.iter().find(|a| a.id == agent_id).ok_or(format!("khong co agent {agent_id}"))?;
+    if agent_status(&d.config, agent_id) == "retired" {
+        return Err(format!("{agent_id} da nghi viec"));
+    }
+    // Tool la bi loc mat thi Claude se cap moi tool: tu choi chay thay vi mo rong quyen.
+    if safe_tools(&agent.tools).len() != agent.tools.len() {
+        return Err(format!("{agent_id}: tools khong hop le ({})", agent.tools.join(", ")));
+    }
     // Lead goi subagent nen phien can du tool cua ca phong; agent khac chi can tool cua minh.
     let mut tools: Vec<&str> = vec![];
     let pool: Vec<&AgentDef> = if agent_id == d.config.lead { d.agent_defs.iter().collect() } else { vec![agent] };
-    for t in pool.iter().flat_map(|a| &a.tools) {
-        if !tools.contains(&t.as_str()) {
-            tools.push(t);
+    for a in pool.iter().filter(|a| a.id == agent_id || agent_status(&d.config, &a.id) != "retired") {
+        for t in safe_tools(&a.tools) {
+            if !tools.contains(&t) {
+                tools.push(t);
+            }
         }
     }
     let mut args = format!(
@@ -267,7 +437,7 @@ pub fn launch_spec(d: &Department, agent_id: &str, plugin_dir: &Path, notes_root
         ps_quote(&format!("{PLUGIN}:{agent_id}"))
     );
     if !tools.is_empty() {
-        args += &format!(" --tools {}", tools.join(" "));
+        args += &format!(" --tools {}", tools.iter().map(|t| ps_quote(t)).collect::<Vec<_>>().join(" "));
     }
     if let Some(n) = notes_root.filter(|n| !n.is_empty()) {
         args += &format!(" --add-dir {}", ps_quote(&Path::new(n).join("ClaudeDeck").to_string_lossy()));
@@ -280,8 +450,15 @@ pub fn launch_spec(d: &Department, agent_id: &str, plugin_dir: &Path, notes_root
 }
 
 /// Ghi plugin tam cua phong + thu muc notes, roi dung tham so khoi chay.
-pub fn prepare_launch(d: &Department, agent: &str, notes_root: Option<&str>) -> Result<LaunchSpec, String> {
-    let dir = std::env::temp_dir().join(format!("claudedeck-plugin-{}", d.config.id));
+/// `model` khac model cua Agent (router / sep chon) -> plugin rieng chi doi model cua Agent chinh, subagent giu nguyen.
+pub fn prepare_launch(d: &Department, agent: &str, notes_root: Option<&str>, model: &str) -> Result<LaunchSpec, String> {
+    let mut d = d.clone();
+    let mut dir = std::env::temp_dir().join(format!("claudedeck-plugin-{}", d.config.id));
+    if let Some(a) = d.agent_defs.iter_mut().find(|a| a.id == agent && valid_model(model) && a.model.as_deref() != Some(model)) {
+        a.model = Some(model.into());
+        dir = std::env::temp_dir().join(format!("claudedeck-plugin-{}-{agent}-{model}", d.config.id));
+    }
+    let d = &d;
     write_plugin(d, &dir).map_err(err)?;
     if let Some(n) = notes_root.filter(|n| !n.is_empty()) {
         std::fs::create_dir_all(Path::new(n).join("ClaudeDeck")).map_err(err)?;
@@ -292,7 +469,7 @@ pub fn prepare_launch(d: &Department, agent: &str, notes_root: Option<&str>) -> 
 #[tauri::command]
 pub fn office_launch(root: String, dept: String, agent: String, notes_root: Option<String>) -> Result<LaunchSpec, String> {
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept).ok_or(format!("khong co phong {dept}"))?;
-    prepare_launch(&d, &agent, notes_root.as_deref())
+    prepare_launch(&d, &agent, notes_root.as_deref(), "")
 }
 
 #[cfg(test)]
@@ -376,6 +553,23 @@ mod tests {
     }
 
     #[test]
+    fn write_plugin_skips_retired() {
+        let root = tmp("retired");
+        dept(&root, &["ok", "qa"], &[("ok", OK), ("qa", OK)]);
+        let p = root.join("departments/t/department.json");
+        let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
+        v["status"] = serde_json::json!({ "qa": "retired" });
+        fs::write(&p, v.to_string()).unwrap();
+        let d = &load_office(&root)[0];
+        assert_eq!(agent_status(&d.config, "qa"), "retired");
+        assert_eq!(agent_status(&d.config, "ok"), "active");
+        let dir = root.join("plugin");
+        write_plugin(d, &dir).unwrap();
+        assert!(dir.join("agents/ok.md").exists() && !dir.join("agents/qa.md").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn load_reports_broken_department() {
         let root = tmp("broken-dept");
         fs::create_dir_all(root.join("departments/oops")).unwrap();
@@ -428,14 +622,58 @@ mod tests {
     fn create_department_writes_files() {
         let root = tmp("newdept");
         let r = root.to_string_lossy().to_string();
-        let id = office_create_department(r.clone(), "Content Media!".into(), "🎬".into(), "Lam video".into()).unwrap();
+        let id = office_create_department(r.clone(), "Content Media!".into(), "🎬".into(), "Lam video".into(), None).unwrap();
         assert_eq!(id, "content-media");
         let d = load_office(&root).into_iter().find(|d| d.config.id == id).unwrap();
         assert_eq!((d.config.name.as_str(), d.config.icon.as_str(), d.config.mission.as_str()), ("Content Media!", "🎬", "Lam video"));
         assert!(d.errors.is_empty());
         assert_eq!(d.room["workspace"]["w"], 3);
-        assert!(office_create_department(r.clone(), "content media".into(), "".into(), "".into()).is_err()); // trung
-        assert!(office_create_department(r, "!!!".into(), "".into(), "".into()).is_err()); // ten rong sau khi lam sach
+        assert!(office_create_department(r.clone(), "content media".into(), "".into(), "".into(), None).is_err()); // trung
+        assert!(office_create_department(r, "!!!".into(), "".into(), "".into(), None).is_err()); // ten rong sau khi lam sach
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn router_picks_first_match_and_plugin_carries_model() {
+        let mut c = DeptConfig::default();
+        let rule = |agent: &str, k: &[&str], m: &str| Route { agent: agent.into(), keywords: k.iter().map(|s| s.to_string()).collect(), model: m.into() };
+        c.router = vec![rule("qa", &["typo"], "opus"), rule("", &["Typo", "README"], "haiku"), rule("", &["x"], "Bad Model;")];
+        assert_eq!(route(&c, "dev", "Sua TYPO trong readme"), "haiku");
+        assert_eq!(route(&c, "qa", "sua typo"), "opus");
+        assert_eq!(route(&c, "dev", "lam tinh nang moi"), "");
+        assert_eq!(route(&c, "dev", "x"), ""); // model la bi bo qua
+        let root = tmp("router");
+        seed_office(&root).unwrap();
+        let d = load_office(&root).into_iter().find(|d| d.config.id == "software-dev").unwrap();
+        let s = prepare_launch(&d, "dev", None, "haiku").unwrap();
+        let dir = std::env::temp_dir().join("claudedeck-plugin-software-dev-dev-haiku");
+        assert!(s.args.contains("claudedeck-plugin-software-dev-dev-haiku"), "{}", s.args);
+        assert!(fs::read_to_string(dir.join("agents/dev.md")).unwrap().contains("model: haiku"));
+        assert!(fs::read_to_string(dir.join("agents/qa.md")).unwrap().contains("model: sonnet")); // subagent giu model
+        assert!(!prepare_launch(&d, "dev", None, "").unwrap().args.contains("-dev-")); // khong chon -> plugin chung
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn create_department_from_seeded_templates() {
+        let root = tmp("tpl");
+        let r = root.to_string_lossy().to_string();
+        seed_office(&root).unwrap();
+        let ts = office_templates(r.clone());
+        assert_eq!(ts.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["media-content", "software-dev"]);
+        assert_eq!(ts[0].agents.len(), 5);
+        let id = office_create_department(r.clone(), "Video Ngan".into(), "🎬".into(), "".into(), Some("media-content".into())).unwrap();
+        let d = load_office(&root).into_iter().find(|d| d.config.id == id).unwrap();
+        assert!(d.errors.is_empty(), "{:?}", d.errors);
+        assert_eq!((d.config.lead.as_str(), d.agent_defs.len()), ("strategist", 5));
+        assert_eq!(agent_status(&d.config, "analyst"), "active");
+        assert_eq!(d.room["seats"]["analyst"]["x"], 8);
+        assert!(d.agent_defs.iter().all(|a| safe_tools(&a.tools).len() == a.tools.len() && !a.tools.is_empty()));
+        // Template sai / thieu agent -> loi, khong de lai phong do dang.
+        assert!(office_create_department(r.clone(), "X".into(), "".into(), "".into(), Some("../hr".into())).is_err());
+        fs::remove_file(root.join("templates/departments/software-dev/agents/qa.md")).unwrap();
+        assert!(office_create_department(r, "Y".into(), "".into(), "".into(), Some("software-dev".into())).unwrap_err().contains("qa.md"));
+        assert!(!root.join("departments/y").exists());
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -524,6 +762,39 @@ mod tests {
         let (root, d) = software_dev("ls-apos");
         let s = launch_spec(&d, "dev", Path::new("a"), Some("H:\\Bob's Vault")).unwrap();
         assert!(s.args.ends_with("--add-dir 'H:\\Bob''s Vault\\ClaudeDeck'"), "{}", s.args);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn launch_spec_drops_unsafe_tools() {
+        let (root, mut d) = software_dev("ls-unsafe");
+        // Lead gom tool cua ca phong: tool la cua agent khac bi bo, chi giu tool an toan (trong nhay).
+        for a in d.agent_defs.iter_mut() {
+            a.tools = if a.id == "qa" { ["Read", "Bash(npm test:*)", "x; Remove-Item -Recurse C:\\", "a`b", "q'r"].map(String::from).to_vec() } else { vec!["Read".into()] };
+        }
+        let s = launch_spec(&d, "tech-lead", Path::new("a"), None).unwrap();
+        assert!(s.args.ends_with("--tools 'Read' 'Bash(npm test:*)'"), "{}", s.args);
+        assert_eq!(safe_tools(&["Read & calc".to_string(), "Edit".into(), "50%".into()]), vec!["Edit"]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn launch_spec_refuses_filtered_tools_and_retired() {
+        let (root, mut d) = software_dev("ls-refuse");
+        d.agent_defs.iter_mut().find(|a| a.id == "qa").unwrap().tools = vec!["Read; Remove-Item x".into()];
+        assert!(launch_spec(&d, "qa", Path::new("a"), None).unwrap_err().contains("tools"));
+        d.config.status.insert("dev".into(), "retired".into());
+        assert!(launch_spec(&d, "dev", Path::new("a"), None).unwrap_err().contains("nghi"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lead_cannot_retire() {
+        let root = tmp("lead-retire");
+        seed_office(&root).unwrap();
+        let r = root.to_string_lossy().to_string();
+        assert!(office_set_agent_status(r.clone(), "software-dev".into(), "tech-lead".into(), "retired".into()).unwrap_err().contains("lead"));
+        assert!(office_set_agent_status(r, "hr".into(), "recruiter".into(), "retired".into()).is_err());
         fs::remove_dir_all(&root).unwrap();
     }
 

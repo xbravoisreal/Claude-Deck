@@ -45,6 +45,8 @@ export function seatsFor(room: RoomCfg, agents: string[], cols: number, rows: nu
   };
 }
 
+const HIRE = "__hire";
+
 /** Trang thai nhan vat theo task hien tai. */
 const pose = (t?: Task) => (t?.status === "running" ? "typing" : t?.status === "waiting" || t?.status === "review" ? "waiting" : "idle");
 
@@ -53,15 +55,18 @@ const ago = (ms: number) => {
   return m < 1 ? "vua xong" : m < 60 ? `${m} phut` : `${Math.round(m / 60)} gio`;
 };
 
-export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory, onWorkspace }: {
+export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory, onWorkspace, onHire }: {
   dept: Dept; tasks: Task[]; ctx: Record<string, number>; tools: Record<string, string>; warnK: number;
-  onDesk: (a: AgentDef) => void; onHistory: () => void; onWorkspace: () => void;
+  onDesk: (a: AgentDef) => void; onHistory: () => void; onWorkspace: () => void; onHire: () => void;
 }) {
   const theme = useTheme()!;
   const cell = cellOf(theme);
   const room = (dept.room ?? {}) as RoomCfg;
   const shelfW = Math.max(1, room.workspace?.w ?? 3);
-  const { seats, cols: seatCols, rows } = seatsFor(room, dept.agent_defs.map((a) => a.id), room.cols ?? Math.max(6, dept.agent_defs.length * 2 + 2), room.rows ?? 3);
+  // Agent da nghi khong co ban; ban cuoi "__hire" = vi tri chua tuyen (+ Tuyen).
+  const status = (id: string) => dept.status?.[id] ?? "active";
+  const staff = dept.agent_defs.filter((a) => status(a.id) !== "retired");
+  const { seats, cols: seatCols, rows } = seatsFor(room, [...staff.map((a) => a.id), HIRE], room.cols ?? Math.max(6, staff.length * 2 + 4), room.rows ?? 3);
   const floor = room.floor && theme.slots[room.floor] ? room.floor : Object.keys(theme.slots).find((k) => k.startsWith("floor.")) ?? "";
   const chars = characters(theme);
   /** Slot nhan vat cho tu the; thieu anh tu the thi lui ve typing, roi ve nhan vat mac dinh theo ten. */
@@ -136,7 +141,10 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
           {/* rtl + ltr ben trong: path qua dai thi cat dau, giu ten thu muc cuoi */}
           <span className="shelf-label"><span dir="ltr">{dept.workspace || "Chon thu muc du an"}</span></span>
         </button>
-        {dept.agent_defs.map((a) => {
+        <button className="seat hire" style={{ left: seats[HIRE].x * cell, top: seats[HIRE].y * cell }} title="Tuyển Agent mới cho phòng (qua HR)" onClick={onHire}>
+          + Tuyển
+        </button>
+        {staff.map((a) => {
             const s = seats[a.id];
             const t = current(a.id);
             const warn = t && (ctx[t.id] ?? 0) >= warnK * 1000;
@@ -153,6 +161,7 @@ export default function Room({ dept, tasks, ctx, tools, warnK, onDesk, onHistory
                 {t && <span className={`bubble ${t.status}`} style={{ bottom: `calc(100% + ${6 - Math.min(0, px(theme.sprite.characterY))}px)` }}>{t.status === "waiting" ? "Chờ síp trả lời" : bubble(t, tools[t.id])}</span>}
                 <span className="seat-label">
                   <b>{a.name}</b>
+                  {status(a.id) === "probation" && <span className="probation">Thử việc</span>}
                   {t && <span>{t.title} · {ago(t.created)}</span>}
                 </span>
               </button>

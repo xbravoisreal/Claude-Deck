@@ -42,6 +42,9 @@ pub struct Task {
     pub ask: String,
     #[serde(default, skip_deserializing)]
     pub summary: String,
+    /// Model chay task (router cua phong hoac sep chon); "" = model trong file Agent.
+    #[serde(default)]
+    pub model: String,
 }
 
 fn err<E: ToString>(e: E) -> String {
@@ -93,6 +96,18 @@ fn exclude_office(ws: &Path) {
     }
 }
 
+/// Worktree moi khong co node_modules (gitignored) nen `npm run ...` khong chay duoc: noi junction ve ban cua workspace.
+/// ponytail: chi node_modules, khong chep .env; junction (khong can quyen admin), loi thi bo qua.
+fn link_node_modules(ws: &Path, tree: &Path) {
+    let src = ws.join("node_modules");
+    if src.is_dir() {
+        #[cfg(windows)]
+        let _ = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(tree.join("node_modules")).arg(&src).output();
+        #[cfg(not(windows))]
+        let _ = std::os::unix::fs::symlink(&src, tree.join("node_modules"));
+    }
+}
+
 pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: Option<&str>) -> Result<Task, String> {
     let ws = Path::new(&d.config.workspace);
     if d.config.workspace.is_empty() {
@@ -100,6 +115,9 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
     }
     if !d.agent_defs.iter().any(|a| a.id == agent) {
         return Err(format!("khong co agent {agent}"));
+    }
+    if crate::office::agent_status(&d.config, agent) == "retired" {
+        return Err(format!("{agent} da nghi viec"));
     }
     let base = match notes.filter(|n| !n.is_empty()) {
         Some(n) => Path::new(n).join("ClaudeDeck").join(&d.config.id),
@@ -118,6 +136,7 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
     let cwd = if git(ws, &["rev-parse", "--is-inside-work-tree"]).is_ok() {
         git(ws, &["worktree", "add", &tree.to_string_lossy(), "-b", &format!("office/{id}")]).map_err(|e| format!("tao worktree loi: {e}"))?;
         exclude_office(ws);
+        link_node_modules(ws, &tree);
         tree
     } else {
         ws.to_path_buf()
@@ -147,6 +166,8 @@ pub fn create_task(d: &Department, agent: &str, title: &str, body: &str, notes: 
         tg_msg: 0,
         ask: String::new(),
         summary: String::new(),
+        model: crate::office::route(&d.config, agent, &format!("{title}
+{body}")),
     })
 }
 
@@ -268,10 +289,24 @@ pub fn task_list(root: String) -> Result<Vec<Task>, String> {
 }
 
 #[tauri::command]
-pub fn task_create(root: String, dept: String, agent: String, title: String, body: String, notes_root: Option<String>) -> Result<Task, String> {
+pub fn task_create(root: String, dept: String, agent: String, title: String, body: String, notes_root: Option<String>, model: Option<String>) -> Result<Task, String> {
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept).ok_or(format!("khong co phong {dept}"))?;
-    let t = create_task(&d, &agent, &title, &body, notes_root.as_deref())?;
-    with_tasks(Path::new(&root), |ts| Ok(ts.push(t.clone())))?;
+    let model = model.filter(|m| !m.is_empty());
+    if model.as_deref().is_some_and(|m| !crate::office::valid_model(m)) {
+        return Err(format!("model khong hop le: {}", model.unwrap_or_default()));
+    }
+    let mut t = create_task(&d, &agent, &title, &body, notes_root.as_deref())?;
+    if let Some(m) = model {
+        t.model = m; // sep chon tay thang router
+    }
+    with_tasks(Path::new(&root), |ts| {
+        // Cho nghi chen vao giua create_task va luc ghi: kiem tra lai trong khoa.
+        let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == dept);
+        if d.is_some_and(|d| crate::office::agent_status(&d.config, &agent) == "retired") {
+            return Err(format!("{agent} da nghi viec"));
+        }
+        Ok(ts.push(t.clone()))
+    })?;
     Ok(t)
 }
 
@@ -337,7 +372,7 @@ pub fn task_args(t: &Task, reopen: bool) -> String {
 fn start(depts: &[Department], t: &Task, reopen: bool, notes: Option<&str>) -> Result<Started, String> {
     let d = depts.iter().find(|d| d.config.id == t.dept).ok_or(format!("khong co phong {}", t.dept))?;
     let name = d.agent_defs.iter().find(|a| a.id == t.agent).map_or(t.agent.as_str(), |a| a.name.as_str());
-    let l = prepare_launch(d, &t.agent, notes)?;
+    let l = prepare_launch(d, &t.agent, notes, &t.model)?;
     Ok(Started {
         task: t.clone(),
         label: format!("{} {name} · {}", d.config.icon, t.title),
@@ -448,7 +483,8 @@ pub fn task_stats(root: String, id: String) -> Result<Stats, String> {
         None => Stats::default(),
     };
     let d = load_office(Path::new(&root)).into_iter().find(|d| d.config.id == t.dept);
-    st.max_tokens = d.and_then(|d| d.config.defaults["maxTokens"].as_u64()).unwrap_or(4_000_000) + t.cap_base;
+    let cap = d.and_then(|d| d.config.budget.get(&t.agent).copied().or(d.config.defaults["maxTokens"].as_u64()));
+    st.max_tokens = cap.unwrap_or(4_000_000) + t.cap_base;
     Ok(st)
 }
 
@@ -505,7 +541,76 @@ mod tests {
             tg_msg: 0,
             ask: String::new(),
             summary: String::new(),
+            model: String::new(),
         }
+    }
+
+    /// Doi status/budget cua agent trong department.json phong software-dev.
+    fn set_dept(office: &Path, f: impl FnOnce(&mut serde_json::Value)) {
+        crate::office::edit_department(office, "software-dev", |v| Ok(f(v))).unwrap();
+    }
+
+    #[test]
+    fn create_task_rejects_retired_agent() {
+        let (root, _ws, _) = setup("retired-create", false);
+        let office = root.join("office");
+        set_dept(&office, |v| v["status"]["qa"] = "retired".into());
+        let d = load_office(&office).into_iter().find(|d| d.config.id == "software-dev").unwrap();
+        let mut d = d;
+        d.config.workspace = root.join("ws").to_string_lossy().into_owned();
+        assert!(create_task(&d, "qa", "x", "", None).unwrap_err().contains("da nghi"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn set_status_retire_refuses_with_open_tasks() {
+        let (root, _ws, _) = setup("retire-open", false);
+        let office = root.join("office");
+        let r = office.to_string_lossy().to_string();
+        let mut t = task("a", "qa", "backlog", 1);
+        t.dept = "software-dev".into();
+        with_tasks(&office, |ts| Ok(ts.push(t))).unwrap();
+        let e = crate::office::office_set_agent_status(r.clone(), "software-dev".into(), "qa".into(), "retired".into()).unwrap_err();
+        assert!(e.contains("con task"), "{e}");
+        update(&r, "a", |t| Ok(t.status = "done".into())).unwrap();
+        crate::office::office_set_agent_status(r.clone(), "software-dev".into(), "qa".into(), "retired".into()).unwrap();
+        let d = load_office(&office).into_iter().find(|d| d.config.id == "software-dev").unwrap();
+        assert_eq!(crate::office::agent_status(&d.config, "qa"), "retired");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn set_status_active_clears_budget_and_rejects_unknown() {
+        let (root, _ws, _) = setup("status-active", false);
+        let office = root.join("office");
+        let r = office.to_string_lossy().to_string();
+        set_dept(&office, |v| {
+            v["status"]["qa"] = "probation".into();
+            v["budget"] = serde_json::json!({ "qa": 1000000 });
+        });
+        crate::office::office_set_agent_status(r.clone(), "software-dev".into(), "qa".into(), "active".into()).unwrap();
+        let d = load_office(&office).into_iter().find(|d| d.config.id == "software-dev").unwrap();
+        assert_eq!(crate::office::agent_status(&d.config, "qa"), "active");
+        assert!(!d.config.budget.contains_key("qa"));
+        assert!(crate::office::office_set_agent_status(r, "software-dev".into(), "qa".into(), "boss".into()).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn task_stats_uses_agent_budget() {
+        let (root, _ws, _) = setup("budget", false);
+        let office = root.join("office");
+        let r = office.to_string_lossy().to_string();
+        set_dept(&office, |v| v["budget"] = serde_json::json!({ "dev": 1000000 }));
+        for (id, agent) in [("a", "dev"), ("b", "qa")] {
+            let mut t = task(id, agent, "running", 1);
+            t.dept = "software-dev".into();
+            t.cap_base = 5;
+            with_tasks(&office, |ts| Ok(ts.push(t))).unwrap();
+        }
+        assert_eq!(task_stats(r.clone(), "a".into()).unwrap().max_tokens, 1_000_005);
+        assert_eq!(task_stats(r, "b".into()).unwrap().max_tokens, 4_000_005);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -680,7 +785,7 @@ mod tests {
         let (root, _ws, d) = setup("resume0", true);
         let r = root.join("office").to_string_lossy().to_string();
         office_set_workspace(r.clone(), "software-dev".into(), d.config.workspace.clone()).unwrap();
-        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "".into(), None).unwrap();
+        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "".into(), None, None).unwrap();
         task_stop_any(&r, &t.id); // gia lap khoi chay loi: waiting, started=false
         let s = task_resume(r.clone(), t.id.clone(), None, Some("bo qua".into())).unwrap();
         assert!(s.args.contains("--session-id") && !s.args.contains("bo qua"), "{}", s.args); // chua chay: prompt goc, bo cau tra loi
@@ -728,7 +833,7 @@ mod tests {
         let office = root.join("office");
         let r = office.to_string_lossy().to_string();
         office_set_workspace(r.clone(), "software-dev".into(), d.config.workspace.clone()).unwrap();
-        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "y".into(), None).unwrap();
+        let t = task_create(r.clone(), "software-dev".into(), "dev".into(), "x".into(), "y".into(), None, None).unwrap();
         let s = task_start_next(r.clone(), 3, None).unwrap();
         assert_eq!(s.len(), 1);
         assert!(s[0].args.contains("--agent 'office:dev'") && s[0].args.contains(&format!("--session-id {}", t.session)), "{}", s[0].args);
