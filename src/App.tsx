@@ -8,6 +8,7 @@ import UsageFooter from "./UsageFooter";
 import Settings, { OfficePrefs, OFFICE_DEFAULTS } from "./Settings";
 import Office, { AgentLaunch, Dept, Task } from "./Office";
 import Drawer from "./Drawer";
+import { TaskBoard, RoutineBoard } from "./Board";
 
 /** task: id task Office gan voi tab (pane chat co dinh `${id}-chat-0`). */
 type Ws = { id: string; cwd: string; agent?: AgentLaunch; task?: string };
@@ -120,7 +121,9 @@ export default function App() {
   const [alerts, setAlerts] = useState<Set<string>>(new Set());
   const [office, setOffice] = useState<OfficePrefs>(OFFICE_DEFAULTS);
   const [settings, setSettings] = useState(false);
-  const [view, setView] = useState<"office" | "terminal">("office");
+  const [remoteUrl, setRemoteUrl] = useState("");
+  const [remoteTick, setRemoteTick] = useState(0);
+  const [view, setView] = useState<"office" | "terminal" | "tasks" | "routines">("office");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [drawer, setDrawer] = useState<false | "pending" | "history">(false);
@@ -162,6 +165,7 @@ export default function App() {
         warnK: (await s.get<number>("warnK")) ?? OFFICE_DEFAULTS.warnK,
         theme: (await s.get<string>("theme")) ?? OFFICE_DEFAULTS.theme,
         tgChat: (await s.get<string>("tgChat")) ?? "",
+        remote: (await s.get<boolean>("remote")) ?? false,
       });
       setReady(true);
     });
@@ -169,7 +173,7 @@ export default function App() {
 
   useEffect(() => {
     if (!ready) return;
-    load("state.json").then((s) => (s.set("folders", tabs.filter((t) => !t.agent).map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes), s.set("maxLive", office.maxLive), s.set("warnK", office.warnK), s.set("theme", office.theme), s.set("tgChat", office.tgChat)));
+    load("state.json").then((s) => (s.set("folders", tabs.filter((t) => !t.agent).map((t) => t.cwd)), s.set("split", split), s.set("ratio", ratio), s.set("model", prefs.model), s.set("auto", prefs.auto), s.set("officeRoot", office.root), s.set("notesRoot", office.notes), s.set("maxLive", office.maxLive), s.set("warnK", office.warnK), s.set("theme", office.theme), s.set("tgChat", office.tgChat), s.set("remote", office.remote)));
   }, [tabs, split, ratio, prefs, office, ready]);
 
   const root = () => officeRef.current.root;
@@ -284,6 +288,12 @@ export default function App() {
     if (ready) invoke("tg_config", { chatId: office.tgChat, root: office.root, notes: office.notes });
   }, [ready, office.tgChat, office.root, office.notes]);
 
+  // Trang xem tu xa qua Tailscale: bat/tat theo Settings; doi token thi cap URL moi.
+  useEffect(() => {
+    if (!ready) return;
+    invoke<string>("remote_config", { enabled: office.remote, root: office.root }).then(setRemoteUrl, (e) => (setRemoteUrl(""), fail(e)));
+  }, [ready, office.remote, office.root, remoteTick]);
+
   // Su kien tu bot: duyet/lam lai tren dien thoai, cho phep/tu choi lenh.
   useEffect(() => {
     const offs = [
@@ -392,6 +402,8 @@ export default function App() {
           </button>
           <button className={view === "office" ? "on" : ""} onClick={() => setView("office")}>Office</button>
           <button className={view === "terminal" ? "on" : ""} onClick={() => setView("terminal")}>Terminal</button>
+          <button className={view === "tasks" ? "on" : ""} onClick={() => setView("tasks")}>Task</button>
+          <button className={view === "routines" ? "on" : ""} onClick={() => setView("routines")}>Routine</button>
           <span className="counts">
             {(["review", "waiting", "running"] as const).map((st) => {
               const n = tasks.filter((t) => t.status === st).length;
@@ -425,7 +437,9 @@ export default function App() {
           onDepts={(ds: Dept[]) => setNames(Object.fromEntries(ds.flatMap((d) => d.agent_defs.map((a) => [`${d.id}/${a.id}`, `${a.name} · ${d.name}`]))))}
         />
       )}
-      <div className={`stage${split ? " split" : ""}${view === "office" ? " hidden" : ""}`} style={{ "--r": ratio } as React.CSSProperties}>
+      {view === "tasks" && <TaskBoard tasks={tasks} names={names} onApprove={approve} onCancel={cancel} onOpen={openTask} />}
+      {view === "routines" && <RoutineBoard root={office.root} notes={office.notes} names={names} onTasks={startNext} />}
+      <div className={`stage${split ? " split" : ""}${view !== "terminal" ? " hidden" : ""}`} style={{ "--r": ratio } as React.CSSProperties}>
         {tabs.length === 0 && (
           <div className="empty">
             <button onClick={openFolder}>Mo thu muc de bat dau</button>
@@ -448,7 +462,7 @@ export default function App() {
       </div>
       {drawer && <Drawer key={drawer} initialTab={drawer} tasks={tasks} names={names} onApprove={approve} onRework={rework} onCancel={cancel} onOpen={openTask} onClose={() => setDrawer(false)} />}
       {settings && <div className="drawer-backdrop" onClick={() => setSettings(false)} />}
-      {settings && <Settings value={office} onSave={setOffice} onClose={() => setSettings(false)} />}
+      {settings && <Settings value={office} remoteUrl={remoteUrl} onResetToken={() => invoke("remote_reset_token").then(() => setRemoteTick((n) => n + 1), fail)} onSave={setOffice} onClose={() => setSettings(false)} />}
       <UsageFooter />
     </div>
   );

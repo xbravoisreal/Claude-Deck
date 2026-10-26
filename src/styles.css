@@ -234,3 +234,10 @@ table.stats td:last-child { white-space: normal; }
 .ctx-menu { position: fixed; z-index: 8; display: flex; flex-direction: column; min-width: 120px; padding: 4px; background: var(--o-room); border: 1px solid var(--o-border); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
 .ctx-menu button { padding: 5px 10px; text-align: left; color: var(--o-text); border-radius: 4px; }
 .ctx-menu button:hover { background: var(--o-input); }
+.board { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+.board-bar { display: flex; gap: 6px; margin-bottom: 6px; }
+.board-bar button.on { background: #3d3d3d; color: #fff; }
+.board-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #303030; border-radius: 6px; }
+.board-row.off { opacity: .5; }
+.board-row .t { font-weight: 600; }
+.board-row .d { flex: 1; color: #888; font-size: 12px; }

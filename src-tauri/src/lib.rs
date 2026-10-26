@@ -4,6 +4,7 @@ mod history;
 mod hr;
 mod office;
 mod pty;
+mod remote;
 mod routines;
 mod stats;
 mod tasks;
@@ -45,6 +46,8 @@ pub fn run() {
             pty::pty_kill,
             usage::get_usage,
             clip::save_image,
+            remote::remote_config,
+            remote::remote_reset_token,
             history::list_sessions,
             office::office_root,
             office::office_load,

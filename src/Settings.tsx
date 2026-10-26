@@ -4,13 +4,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 /** notes "" = khong dung vault Obsidian. maxLive: so phien task song toi da. warnK: nguong canh bao ngu canh (nghin token).
  *  theme: ten thu muc trong <root>/themes. tgChat: chat id Telegram ("" = tat bot). Token bot KHONG nam o day (Credential Manager). */
-export type OfficePrefs = { root: string; notes: string; maxLive: number; warnK: number; theme: string; tgChat: string };
-export const OFFICE_DEFAULTS: OfficePrefs = { root: "", notes: "", maxLive: 3, warnK: 150, theme: "default", tgChat: "" };
+export type OfficePrefs = { root: string; notes: string; maxLive: number; warnK: number; theme: string; tgChat: string; remote: boolean };
+export const OFFICE_DEFAULTS: OfficePrefs = { root: "", notes: "", maxLive: 3, warnK: 150, theme: "default", tgChat: "", remote: false };
 
 type Dir = "root" | "notes";
 type Num = "maxLive" | "warnK";
 
-export default function Settings({ value, onSave, onClose }: { value: OfficePrefs; onSave: (v: OfficePrefs) => void; onClose: () => void }) {
+export default function Settings({ value, remoteUrl, onResetToken, onSave, onClose }: { value: OfficePrefs; remoteUrl: string; onResetToken: () => void; onSave: (v: OfficePrefs) => void; onClose: () => void }) {
   const [v, setV] = useState(value);
   const [themes, setThemes] = useState<string[]>([value.theme]);
   // Token chi di mot chieu xuong Rust; o nhap de trong = giu token da luu.
@@ -83,6 +83,19 @@ export default function Settings({ value, onSave, onClose }: { value: OfficePref
           <input type="checkbox" checked={autostart} onChange={(e) => invoke("autostart_set", { on: e.target.checked }).then(() => setAutostart(!autostart), (err) => setTg(`loi: ${err}`))} />
           <span>Chay cung Windows (vao thang khay; routine va bot chi chay khi app mo)</span>
         </label>
+
+        <div className="set-sub">Xem từ xa (Tailscale)</div>
+        <label className="set-field set-check">
+          <input type="checkbox" checked={v.remote} onChange={(e) => setV({ ...v, remote: e.target.checked })} />
+          <span>Mở trang web xem/duyệt task trên IP Tailscale của máy này (cổng 7878, cần token). Bấm Lưu để áp dụng.</span>
+        </label>
+        {value.remote && remoteUrl && (
+          <div className="tg-chats">
+            <input readOnly value={remoteUrl} onFocus={(e) => e.target.select()} />
+            <button onClick={() => navigator.clipboard.writeText(remoteUrl)}>Copy link</button>
+            <button title="Link cũ ngừng hoạt động" onClick={onResetToken}>Đổi token</button>
+          </div>
+        )}
 
         <div className="set-sub">Telegram</div>
         <label className="set-field">

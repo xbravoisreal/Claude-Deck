@@ -1,0 +1,39 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ClaudeDeck</title>
+<style>
+body{margin:0;padding:12px;background:#1f1f1f;color:#dedede;font:15px system-ui}
+h2{font-size:14px;color:#a8a8a8;margin:18px 0 6px}
+.t{background:#303030;border-radius:8px;padding:10px;margin-bottom:8px}
+.t b{display:block}.d{color:#888;font-size:12px}.s{white-space:pre-wrap;margin:6px 0;color:#bbb}
+button{padding:8px 14px;margin:6px 6px 0 0;border:0;border-radius:6px;background:#444;color:#eee;font:inherit}
+button.p{background:#d97757}
+</style>
+<div id=app>...</div>
+<script>
+const T=new URLSearchParams(location.search).get("t")||"";
+const H={"X-Token":T};
+const LABEL={review:"Chờ duyệt",waiting:"Chờ trả lời",running:"Đang làm",backlog:"Hàng đợi",done:"Xong"};
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+async function act(a,id,body){
+  const r=await fetch("/api/"+a+"/"+id,{method:"POST",headers:H,body:body&&JSON.stringify(body)});
+  if(!r.ok)alert(await r.text());
+  load();
+}
+function rework(id){const n=prompt("Nhận xét để làm lại:");if(n&&n.trim())act("rework",id,{note:n})}
+async function load(){
+  const r=await fetch("/api/tasks",{headers:H});
+  if(!r.ok){app.textContent=await r.text();return}
+  const ts=await r.json();
+  app.innerHTML=["review","waiting","running","backlog","done"].map(st=>{
+    const l=ts.filter(t=>t.status===st);
+    return l.length?"<h2>"+LABEL[st]+" ("+l.length+")</h2>"+l.map(t=>"<div class=t><b>"+esc(t.title)+"</b>"
+      +"<div class=d>"+esc(t.dept)+" / "+esc(t.agent)+" · "+esc(t.id)+(t.model?" · "+esc(t.model):"")+"</div>"
+      +(t.summary?"<div class=s>"+esc(t.summary)+"</div>":"")
+      +(t.status==="waiting"&&t.ask?"<div class=s>"+esc(t.ask)+"</div>":"")
+      +(t.status==="review"?"<button class=p onclick=\"act('approve','"+esc(t.id)+"')\">Duyệt</button><button onclick=\"rework('"+esc(t.id)+"')\">Làm lại</button>":"")
+      +(t.status==="waiting"||t.status==="backlog"?"<button onclick=\"act('cancel','"+esc(t.id)+"')\">Hủy</button>":"")
+      +"</div>").join(""):"";
+  }).join("")||"Không có task.";
+}
+load();setInterval(load,10000);
+</script>

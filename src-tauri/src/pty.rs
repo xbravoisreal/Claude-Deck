@@ -186,7 +186,7 @@ fn last_reply(path: &str) -> String {
 
 /// Doc tron mot request (header + than theo Content-Length), toi da 64KB, tong cong toi da 2s
 /// (server mot luong: client gui nho giot khong duoc giu no lau).
-fn read_request(stream: &mut std::net::TcpStream) -> String {
+pub(crate) fn read_request(stream: &mut std::net::TcpStream) -> String {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     let mut data = Vec::new();
     let mut buf = [0u8; 4096];

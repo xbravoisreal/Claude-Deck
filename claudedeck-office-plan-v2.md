@@ -174,6 +174,8 @@ Mỗi giai đoạn chạy được, kiểm tra được và commit riêng.
 
 **Giai đoạn 7: Routine, thông báo, từ xa.** Scheduler, runner có giới hạn, chạy cùng Windows và thu nhỏ xuống khay, ntfy hoặc Telegram, xem từ điện thoại qua Tailscale (bắt buộc token nếu mở ra mạng).
 
+**Bổ sung sau GĐ8 (đã làm):** xem/duyệt từ xa qua Tailscale (Settings, cổng 7878, token trong Credential Manager, chỉ bind IP Tailscale); tab Task và Routine ở thanh trên; hook gắn theo từng phiên qua `--settings` tạm nên không có nút Cài/Gỡ hook (không đụng `~/.claude/settings.json`). Routine chỉ chạy khi app mở (kể cả dưới khay), chưa dùng Windows Task Scheduler.
+
 **Giai đoạn 8: Thống kê và prompt router.** Token và chi phí theo phòng và theo Agent, báo cáo đánh giá cho HR, prompt router chọn Haiku, Sonnet hoặc Opus theo từng Agent và loại task (bắt đầu bằng luật đơn giản, đo rồi mới chỉnh).
 
 ---
