@@ -358,6 +358,15 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
+  // Routine: moi 30s hoi Rust co routine nao den gio -> tao task, chay theo hang doi nhu task thuong.
+  useEffect(() => {
+    if (!ready) return;
+    const iv = setInterval(() => {
+      invoke<Task[]>("routine_tick", { root: root(), notesRoot: notesRoot() }).then((ts) => void (ts.length > 0 && startNext()), fail);
+    }, 30000);
+    return () => clearInterval(iv);
+  }, [ready]);
+
   const openFolder = async () => {
     const cwd = await open({ directory: true });
     if (typeof cwd !== "string") return;

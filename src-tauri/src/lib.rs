@@ -4,6 +4,7 @@ mod history;
 mod hr;
 mod office;
 mod pty;
+mod routines;
 mod tasks;
 mod telegram;
 mod theme;
@@ -20,6 +21,13 @@ pub fn run() {
         .manage(pty::Sessions::default())
         .setup(|app| {
             tray(app)?;
+            // Chay cung Windows (--hidden): vao thang khay, khong bat cua so.
+            if std::env::args().any(|a| a == HIDDEN) {
+                use tauri::Manager;
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
             Ok(())
         })
         // Nut X = thu xuong khay: phien Agent va bot Telegram van chay; thoat han tu menu khay.
@@ -71,6 +79,13 @@ pub fn run() {
             telegram::tg_resolved,
             theme::theme_load,
             theme::theme_list,
+            routines::routine_list,
+            routines::routine_save,
+            routines::routine_delete,
+            routines::routine_run,
+            routines::routine_tick,
+            autostart_get,
+            autostart_set,
             open_in_editor,
             accounts::list_accounts,
             accounts::switch_account,
@@ -123,4 +138,34 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
 #[tauri::command]
 fn open_in_editor(path: String) -> Result<(), String> {
     tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
+}
+
+const HIDDEN: &str = "--hidden";
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+
+fn reg(args: &[&str]) -> std::io::Result<std::process::Output> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("reg").args(args).creation_flags(0x0800_0000).output()
+}
+
+/// Settings "Chay cung Windows": muc ClaudeDeck trong HKCU Run (khong can quyen admin).
+#[tauri::command]
+fn autostart_get() -> bool {
+    reg(&["query", RUN_KEY, "/v", "ClaudeDeck"]).is_ok_and(|o| o.status.success())
+}
+
+#[tauri::command]
+fn autostart_set(on: bool) -> Result<(), String> {
+    let out = if on {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        reg(&["add", RUN_KEY, "/v", "ClaudeDeck", "/t", "REG_SZ", "/d", &format!("\"{}\" {HIDDEN}", exe.to_string_lossy()), "/f"])
+    } else {
+        reg(&["delete", RUN_KEY, "/v", "ClaudeDeck", "/f"])
+    }
+    .map_err(|e| e.to_string())?;
+    if out.status.success() || (!on && !autostart_get()) {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }

@@ -88,6 +88,12 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .settings .history-list { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 .set-field { display: flex; flex-direction: column; gap: 4px; color: #a8a8a8; font-size: 12px; }
 .set-field > div { display: flex; gap: 6px; }
+.set-check { flex-direction: row; align-items: center; }
+.set-check input { flex: none; }
+.ap-routine { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #333; font-size: 12px; }
+.ap-routine .t { flex: 1; min-width: 120px; }
+.ap-routine.off .t { opacity: .5; }
+.ap-days { display: flex; gap: 4px; flex-wrap: wrap; font-size: 12px; }
 .set-field input { flex: 1; min-width: 0; padding: 5px 8px; background: #2a2a2a; color: #d4d4d4; border: 1px solid #454545; border-radius: 4px; font: inherit; }
 .set-field button, .set-actions button { padding: 4px 10px; border: 1px solid #454545; border-radius: 4px; }
 .set-actions { display: flex; justify-content: flex-end; gap: 6px; }
